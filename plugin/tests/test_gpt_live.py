@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import os
 
 import httpx
 import pytest
@@ -156,3 +157,56 @@ def test_bad_provider_sdp_is_a_provider_failure(monkeypatch):
             return await gpt_live.create_session(OFFER, client=client)
     with pytest.raises(gpt_live.GptLiveRejected, match="invalid SDP answer"):
         asyncio.run(run())
+
+
+def _codex_home(tmp_path, name: str, account_id: str):
+    home = tmp_path / name
+    home.mkdir()
+    (home / "auth.json").write_text(
+        json.dumps({"auth_mode": "chatgpt", "tokens": {"access_token": _oauth_token(account_id)}}),
+        encoding="utf-8",
+    )
+    return home
+
+
+def test_usage_limit_moves_to_next_codex_account(monkeypatch, tmp_path):
+    first = _codex_home(tmp_path, "first", "acct_first")
+    second = _codex_home(tmp_path, "second", "acct_second")
+    monkeypatch.setenv(gpt_live.CODEX_HOMES_ENV, f"{first}{os.pathsep}{second}")
+    monkeypatch.setattr(gpt_live, "_limited_until", {})
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        account = request.headers["chatgpt-account-id"]
+        seen.append(account)
+        if account == "acct_first":
+            return httpx.Response(429, text="limit")
+        return httpx.Response(201, text=ANSWER, headers={"openai-session-id": "rtc_test"})
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            return await gpt_live.create_session(OFFER, client=client)
+
+    assert asyncio.run(run())["transport"]["sdp"] == ANSWER
+    assert seen == ["acct_first", "acct_second"]
+    # The limited account rests; the next session goes straight to the second.
+    seen.clear()
+    asyncio.run(run())
+    assert seen == ["acct_second"]
+
+
+def test_all_accounts_limited_is_unavailable(monkeypatch, tmp_path):
+    only = _codex_home(tmp_path, "only", "acct_only")
+    monkeypatch.setenv(gpt_live.CODEX_HOMES_ENV, str(only))
+    monkeypatch.setattr(gpt_live, "_limited_until", {})
+
+    async def run():
+        transport = httpx.MockTransport(lambda request: httpx.Response(429, text="limit"))
+        async with httpx.AsyncClient(transport=transport) as client:
+            return await gpt_live.create_session(OFFER, client=client)
+
+    with pytest.raises(gpt_live.GptLiveRejected, match="usage limit"):
+        asyncio.run(run())
+    with pytest.raises(gpt_live.GptLiveUnavailable, match="resting after its usage limit"):
+        asyncio.run(run())
+    assert gpt_live.readiness().available is False

@@ -19,14 +19,20 @@ import json
 import logging
 import os
 import re
+import time
 import uuid
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Mapping
 from urllib.parse import urlparse
 
 import httpx
 
-from .realtime_agent.providers.openai import AuthToken, _resolve_codex_oauth_token
+from .realtime_agent.providers.openai import (
+    AuthToken,
+    _resolve_codex_oauth_token,
+    read_codex_auth_file,
+)
 
 DEFAULT_MODEL = "gpt-live-1-codex"
 DEFAULT_VOICE = "cove"
@@ -122,9 +128,56 @@ def _auth() -> tuple[AuthToken, str]:
     return auth, account_id
 
 
+# Several ChatGPT subscriptions: one Codex home (``CODEX_HOME=<dir> codex login``)
+# per account, listed in RELAY_GPT_LIVE_CODEX_HOMES (os.pathsep-separated). An
+# account that hits its usage limit rests for USAGE_LIMIT_COOLDOWN_S and the
+# next one is tried.
+CODEX_HOMES_ENV = "RELAY_GPT_LIVE_CODEX_HOMES"
+USAGE_LIMIT_COOLDOWN_S = 30 * 60
+_limited_until: dict[str, float] = {}
+
+
+@dataclass(frozen=True, slots=True)
+class _Account:
+    auth: AuthToken
+    account_id: str
+    key: str
+
+
+def _codex_homes() -> list[Path]:
+    raw = os.getenv(CODEX_HOMES_ENV, "")
+    return [Path(part).expanduser() for part in raw.split(os.pathsep) if part.strip()]
+
+
+def _accounts() -> list[_Account]:
+    """Usable logins in priority order, skipping accounts resting after a usage limit."""
+    homes = _codex_homes()
+    if not homes:
+        auth, account_id = _auth()
+        return [_Account(auth, account_id, key="default")]
+    now = time.monotonic()
+    usable: list[_Account] = []
+    for home in homes:
+        key = str(home)
+        if _limited_until.get(key, 0.0) > now:
+            continue
+        auth = read_codex_auth_file(home / "auth.json")
+        account_id = _chatgpt_account_id(auth.value) if auth else None
+        if auth is None or account_id is None:
+            logger.warning("GPT-Live skipped Codex home without a usable ChatGPT login: %s", key)
+            continue
+        usable.append(_Account(auth, account_id, key=key))
+    if not usable:
+        raise GptLiveUnavailable(
+            "No GPT-Live ChatGPT account is available: every configured login is missing, "
+            "expired, or resting after its usage limit."
+        )
+    return usable
+
+
 def readiness() -> GptLiveReadiness:
     try:
-        auth, _account_id = _auth()
+        auth = _accounts()[0].auth
     except GptLiveUnavailable as exc:
         return GptLiveReadiness(
             available=False,
@@ -220,19 +273,25 @@ async def create_session(
     """
     del history
     offer = validate_sdp(sdp)
-    auth, account_id = _auth()
     payload = {"sdp": offer, "session": _session_config()}
     owns_client = client is None
     http = client or httpx.AsyncClient(timeout=TIMEOUT)
     try:
-        response = await http.post(
-            SUBSCRIPTION_CALL_URL,
-            headers=_headers(auth, account_id),
-            json=payload,
-            follow_redirects=False,
-        )
-    except Exception as exc:
-        raise GptLiveRejected("GPT-Live subscription session negotiation failed") from exc
+        for account in _accounts():
+            auth, account_id = account.auth, account.account_id
+            try:
+                response = await http.post(
+                    SUBSCRIPTION_CALL_URL,
+                    headers=_headers(auth, account_id),
+                    json=payload,
+                    follow_redirects=False,
+                )
+            except Exception as exc:
+                raise GptLiveRejected("GPT-Live subscription session negotiation failed") from exc
+            if response.status_code != 429:
+                break
+            logger.warning("GPT-Live account hit its usage limit; trying the next login")
+            _limited_until[account.key] = time.monotonic() + USAGE_LIMIT_COOLDOWN_S
     finally:
         if owns_client:
             await http.aclose()

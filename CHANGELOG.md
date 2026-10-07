@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Added
 
+- GPT-Live can use several ChatGPT subscriptions (`RELAY_GPT_LIVE_CODEX_HOMES`) and moves to the next account when one reaches its usage limit.
 - Android Appearance offers a Clean layout: assistant replies read as open text, message details appear on tap, each turn shows one tool summary, header shortcuts move into the menu, and the status bar appears only when the connection needs attention.
 - Android Clean and Material You themes; Material You follows wallpaper colors on Android 12 and later.
 

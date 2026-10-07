@@ -47,6 +47,13 @@ Host operators can set `RELAY_GPT_LIVE_SUBSCRIPTION_MODEL` and
 `RELAY_GPT_LIVE_SUBSCRIPTION_VOICE` in the Dashboard process environment, then
 restart the Dashboard.
 
+To spread GPT-Live across several ChatGPT subscriptions, sign each account in
+to its own Codex folder (`CODEX_HOME=/path/to/account-1 codex login`) and list
+the folders, in order of preference, in `RELAY_GPT_LIVE_CODEX_HOMES` (separated
+by `:` on Linux and macOS). When an account reaches its usage limit, Relay
+starts the session with the next account and skips the limited one for 30
+minutes.
+
 Tap the microphone to pause or resume listening. Pausing the microphone does
 not stop a response already playing. Close Voice to end the call and release
 both microphone and playback. Changing the connection or profile ends the live
