@@ -259,25 +259,28 @@ class StandardGptLiveVoiceClient(
  * (for example a gateway's JSON or HTML 502 body) stay in the log; only a
  * short server-provided `detail`/`error` string is shown.
  */
-internal fun gptLiveHttpErrorMessage(operation: String, code: Int, body: String): String =
-    when (code) {
-        401, 403 -> "$operation needs dashboard sign-in"
-        404 -> "$operation is unavailable on this Hermes build"
-        502, 503, 504 -> "$operation failed: Hermes server unavailable (HTTP $code)"
-        else -> {
-            val detail = runCatching {
-                val root = Json.parseToJsonElement(body) as? JsonObject
-                listOf("detail", "error").firstNotNullOfOrNull { key ->
-                    (root?.get(key) as? JsonPrimitive)
-                        ?.takeIf { primitive -> primitive.isString }
-                        ?.content
-                        ?.trim()
-                        ?.takeIf { text -> text.isNotEmpty() && text.length <= 200 }
-                }
-            }.getOrNull()
-            if (detail != null) "$operation failed (HTTP $code): $detail" else "$operation failed (HTTP $code)"
+internal fun gptLiveHttpErrorMessage(operation: String, code: Int, body: String): String {
+    val unavailable = "$operation failed: Hermes server unavailable (HTTP $code)"
+    if (code == 401 || code == 403) return "$operation needs dashboard sign-in"
+    if (code == 404) return "$operation is unavailable on this Hermes build"
+    // Proxies replace origin 502/504 bodies with their own error pages.
+    if (code == 502 || code == 504) return unavailable
+    val detail = runCatching {
+        val root = Json.parseToJsonElement(body) as? JsonObject
+        listOf("detail", "error").firstNotNullOfOrNull { key ->
+            (root?.get(key) as? JsonPrimitive)
+                ?.takeIf { primitive -> primitive.isString }
+                ?.content
+                ?.trim()
+                ?.takeIf { text -> text.isNotEmpty() && text.length <= 200 }
         }
+    }.getOrNull()
+    return when {
+        detail != null -> "$operation failed (HTTP $code): $detail"
+        code == 503 -> unavailable
+        else -> "$operation failed (HTTP $code)"
     }
+}
 
 private data class LiveSessionAnswer(
     val sessionId: String?,

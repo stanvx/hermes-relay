@@ -121,6 +121,24 @@ def test_create_session_does_not_echo_provider_body(monkeypatch):
     assert token not in str(error.value)
 
 
+def test_usage_limit_is_reported_as_429(monkeypatch):
+    token = _oauth_token()
+    monkeypatch.setattr(
+        gpt_live,
+        "_resolve_codex_oauth_token",
+        lambda: AuthToken(token, "codex-cli:chatgpt"),
+    )
+
+    async def run():
+        transport = httpx.MockTransport(lambda request: httpx.Response(429, text="limit"))
+        async with httpx.AsyncClient(transport=transport) as client:
+            return await gpt_live.create_session(OFFER, client=client)
+
+    with pytest.raises(gpt_live.GptLiveRejected, match="usage limit") as error:
+        asyncio.run(run())
+    assert error.value.upstream_status == 429
+
+
 @pytest.mark.parametrize("offer", [None, "", "m=audio 9 UDP/TLS/RTP/SAVPF 111\r\n", "v=0\r\n", "v=0\r\nm=audio \x00"])
 def test_invalid_offer_is_rejected_before_authentication(monkeypatch, offer):
     def unexpected_auth():

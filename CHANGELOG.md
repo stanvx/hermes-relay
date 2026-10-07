@@ -24,6 +24,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- GPT-Live startup errors read as short messages: a ChatGPT usage limit is reported as such, and proxy error pages are no longer shown in the app.
+
 - GPT-Live replies follow the media speaker/headphone route instead of the call earpiece; subscription response events update Speaking state and captions without duplicating delegated answers.
 
 - GPT-Live subscription voice now has an explicit engine selection, consistent microphone pause/resume, bounded Unicode text, and session cleanup with visible startup errors.

@@ -752,7 +752,10 @@ async def create_voice_live_session(
     except live.GptLiveUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except live.GptLiveRejected as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        # 502/504 from the origin are replaced by proxy error pages (for
+        # example Cloudflare), hiding the reason; 429/503 pass through.
+        status = 429 if exc.upstream_status == 429 else 503
+        raise HTTPException(status_code=status, detail=str(exc)) from exc
     return {"ok": True, **result}
 
 

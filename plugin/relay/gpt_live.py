@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import os
 import re
 import uuid
@@ -29,6 +30,8 @@ from .realtime_agent.providers.openai import AuthToken, _resolve_codex_oauth_tok
 
 DEFAULT_MODEL = "gpt-live-1-codex"
 DEFAULT_VOICE = "cove"
+logger = logging.getLogger(__name__)
+
 SUBSCRIPTION_CALL_URL = (
     "https://chatgpt.com/backend-api/codex/realtime/calls"
     "?intent=quicksilver&architecture=avas"
@@ -49,6 +52,10 @@ class GptLiveUnavailable(RuntimeError):
 
 class GptLiveRejected(RuntimeError):
     """The subscription service rejected a bounded GPT-Live session request."""
+
+    def __init__(self, message: str, *, upstream_status: int | None = None) -> None:
+        super().__init__(message)
+        self.upstream_status = upstream_status
 
 
 @dataclass(frozen=True, slots=True)
@@ -232,8 +239,16 @@ async def create_session(
     if response.status_code not in {200, 201}:
         # Do not include the upstream body: authentication failures can echo
         # account metadata. The status code is enough for diagnostics.
+        status = response.status_code
+        logger.warning("GPT-Live subscription session creation rejected: HTTP %s", status)
+        if status == 429:
+            raise GptLiveRejected(
+                "ChatGPT usage limit reached for GPT-Live; try again after it resets",
+                upstream_status=status,
+            )
         raise GptLiveRejected(
-            f"ChatGPT rejected GPT-Live subscription session creation (HTTP {response.status_code})"
+            f"ChatGPT rejected GPT-Live subscription session creation (HTTP {status})",
+            upstream_status=status,
         )
     try:
         answer = response.content.decode("utf-8")

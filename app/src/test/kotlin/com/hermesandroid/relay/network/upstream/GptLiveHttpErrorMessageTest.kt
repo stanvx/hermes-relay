@@ -22,6 +22,17 @@ class GptLiveHttpErrorMessageTest {
         )
     }
 
+    @Test fun usageLimitDetailPassesThrough() {
+        assertEquals(
+            "$op failed (HTTP 429): ChatGPT usage limit reached",
+            gptLiveHttpErrorMessage(op, 429, """{"detail":"ChatGPT usage limit reached"}"""),
+        )
+        assertEquals(
+            "$op failed: Hermes server unavailable (HTTP 503)",
+            gptLiveHttpErrorMessage(op, 503, "<html>down</html>"),
+        )
+    }
+
     @Test fun htmlOrLongBodyFallsBackToStatusOnly() {
         assertEquals("$op failed (HTTP 500)", gptLiveHttpErrorMessage(op, 500, "<html>oops</html>"))
         val long = """{"detail":"${"x".repeat(300)}"}"""
