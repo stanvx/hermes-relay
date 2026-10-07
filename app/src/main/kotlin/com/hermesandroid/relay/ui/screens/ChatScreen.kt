@@ -1673,7 +1673,7 @@ fun ChatScreen(
         }
     }
 
-    val gptLiveActive = voiceStats.gptLiveActive
+    val gptLiveActive = voiceStats.gptLiveActive || voiceStats.voiceEngineMode == "gpt_live"
     val effectiveVoiceEngineMode = if (gptLiveActive) "gpt_live" else voiceStats.voiceEngineMode
     val realtimeAgentActive = !gptLiveActive && voiceStats.voiceEngineMode == "realtime_agent"
     val activeVoiceProvider = if (gptLiveActive) {

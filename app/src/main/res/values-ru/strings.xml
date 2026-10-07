@@ -4370,4 +4370,11 @@
     <string name="voice_streaming_stopped_basic_next">Потоковая озвучка остановилась. Оставшийся текст будет озвучен в базовом режиме. Проверьте настройки голосового провайдера.</string>
     <string name="stats_tts_queue_wait">Ожидание в очереди аудио</string>
     <string name="stats_tts_player_start">Задержка запуска плеера</string>
+    <string name="voice_overlay_engine_gpt_live">GPT-Live</string>
+    <string name="voice_overlay_gpt_live_mode">В реальном времени · автоматическое определение реплик</string>
+    <string name="voice_overlay_gpt_live_listening_action">Приостановить микрофон GPT-Live</string>
+    <string name="voice_overlay_gpt_live_resume_action">Возобновить микрофон GPT-Live</string>
+    <string name="voice_settings_gpt_live_desc">Непрерывный голосовой разговор с подпиской Codex. Hermes выполняет задачи и отвечает.</string>
+    <string name="voice_settings_gpt_live_setup">Использует плагин Relay для панели управления и вход в Codex на сервере. При необходимости войдите в разделе «Управление». Перехода на API с оплатой за использование нет.</string>
+    <string name="voice_settings_gpt_live_controls">GPT-Live автоматически определяет реплики и прерывания. Нажмите на микрофон, чтобы приостановить или возобновить прослушивание. Закройте голосовой режим, чтобы завершить сеанс.</string>
 </resources>

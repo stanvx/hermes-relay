@@ -544,7 +544,9 @@ fun VoiceSettingsScreen(
                         voiceSettings = voiceSettings,
                         prefsRepo = prefsRepo,
                     )
-                    if (currentEngine == VoiceEngineMode.HermesVoiceOutput) {
+                    if (currentEngine == VoiceEngineMode.GptLive) {
+                        GptLiveSettingsCard(voiceViewModel, connectionId, selectedProfile?.name)
+                    } else if (currentEngine == VoiceEngineMode.HermesVoiceOutput) {
                         val useRelayOutput = relayVoiceReady && currentAudioRoute != VoiceAudioRoute.Standard
                         if (useRelayOutput) {
                             if (configState.isLoading || !configState.hasLoaded) {
@@ -583,7 +585,10 @@ fun VoiceSettingsScreen(
 
                 VoiceSettingsSection.Listening -> {
                     com.hermesandroid.relay.voice.VoiceOverlaySettingsCard()
-                    GlobalVoiceControlsCard(
+                    if (currentEngine == VoiceEngineMode.GptLive) {
+                        Text(stringResource(R.string.voice_settings_gpt_live_controls),
+                            style = MaterialTheme.typography.bodyMedium)
+                    } else GlobalVoiceControlsCard(
                         voiceSettings = voiceSettings,
                         prefsRepo = prefsRepo,
                         voiceViewModel = voiceViewModel,
@@ -620,12 +625,12 @@ fun VoiceSettingsScreen(
                             settingsViewModel::setWakeWordStartNewSession,
                         onTest = settingsViewModel::testWakeWord,
                     )
-                    BargeInCard(
+                    if (currentEngine != VoiceEngineMode.GptLive) BargeInCard(
                         bargeInPrefs = bargeInPrefs,
                         aecAvailable = aecAvailable,
                         settingsViewModel = settingsViewModel,
                     )
-                    SpeechToTextCard(
+                    if (currentEngine != VoiceEngineMode.GptLive) SpeechToTextCard(
                         relayVoiceReady = relayVoiceReady,
                         configState = configState,
                     )
@@ -747,7 +752,10 @@ private fun VoiceScopeBanner(
             modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            if (!relayVoiceReady) {
+            if (currentEngine == VoiceEngineMode.GptLive) {
+                Text(stringResource(R.string.voice_settings_gpt_live_setup),
+                    style = MaterialTheme.typography.bodySmall)
+            } else if (!relayVoiceReady) {
                 // Standard (no-Relay): current upstream audio routes accept the
                 // active profile explicitly, so TTS/STT resolve through the
                 // same Hermes home as chat.
@@ -773,6 +781,7 @@ private fun VoiceScopeBanner(
                 val config: Any? = when (currentEngine) {
                     VoiceEngineMode.HermesVoiceOutput ->
                         configState.voiceOutputConfig ?: configState.voiceConfig
+                    VoiceEngineMode.GptLive -> null
                     VoiceEngineMode.RealtimeAgent ->
                         configState.realtimeConfig ?: configState.voiceConfig
                 }
@@ -969,6 +978,11 @@ private fun VoiceForThisProfileCard(
                 stringResource(R.string.voice_settings_engine_hermes_desc),
                 false,
             ),
+            VoiceEngineMode.GptLive to Triple(
+                stringResource(R.string.voice_overlay_engine_gpt_live),
+                stringResource(R.string.voice_settings_gpt_live_desc),
+                false,
+            ),
             VoiceEngineMode.RealtimeAgent to Triple(
                 stringResource(R.string.voice_settings_engine_realtime),
                 stringResource(R.string.voice_settings_engine_realtime_desc),
@@ -979,7 +993,7 @@ private fun VoiceForThisProfileCard(
             // RealtimeAgent requires a paired Relay; HermesVoiceOutput is always
             // selectable. The existing warning row below explains the disabled
             // RealtimeAgent radio.
-            val engineEnabled = engine == VoiceEngineMode.HermesVoiceOutput || relayVoiceReady
+            val engineEnabled = engine != VoiceEngineMode.RealtimeAgent || relayVoiceReady
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -4119,6 +4133,7 @@ private fun TestCurrentEngineCard(
             label = stringResource(R.string.voice_settings_label_engine),
             value = when (currentEngine) {
                 VoiceEngineMode.HermesVoiceOutput -> hermesEngineLabel
+                VoiceEngineMode.GptLive -> stringResource(R.string.voice_overlay_engine_gpt_live)
                 VoiceEngineMode.RealtimeAgent -> realtimeEngineLabel
             },
         )
@@ -4998,6 +5013,7 @@ private fun voiceOutputSummary(
     } ?: "realtime loading..."
     return profileLabel to when (currentEngine) {
         VoiceEngineMode.HermesVoiceOutput -> stringResource(R.string.voice_settings_summary_hermes_engine, outputLabel)
+        VoiceEngineMode.GptLive -> stringResource(R.string.voice_settings_gpt_live_desc)
         VoiceEngineMode.RealtimeAgent -> stringResource(R.string.voice_settings_summary_realtime_engine, realtimeLabel)
     }
 }
@@ -5022,7 +5038,7 @@ private fun VoiceProfileSummaryCard(
         realtimeModel = realtimeModel,
         realtimeVoice = realtimeVoice,
     )
-    val profileScoped = currentEngine == VoiceEngineMode.RealtimeAgent ||
+    val profileScoped = currentEngine != VoiceEngineMode.HermesVoiceOutput ||
         (relayVoiceReady && currentAudioRoute != VoiceAudioRoute.Standard)
     val displayedVoiceSummary = if (profileScoped) {
         voiceSummary
@@ -5058,7 +5074,9 @@ private fun VoiceProfileSummaryCard(
             }
             Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(
-                    text = if (currentEngine == VoiceEngineMode.RealtimeAgent) {
+                    text = if (currentEngine == VoiceEngineMode.GptLive) {
+                        stringResource(R.string.voice_overlay_engine_gpt_live)
+                    } else if (currentEngine == VoiceEngineMode.RealtimeAgent) {
                         "Real-time Voice Agent"
                     } else {
                         "Hermes Chat + Voice Output"
@@ -5111,6 +5129,7 @@ private fun VoiceModePickerDialog(
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 listOf(
                     VoiceEngineMode.HermesVoiceOutput to ("Hermes Chat + Voice Output" to "Hermes answers with your selected TTS voice"),
+                    VoiceEngineMode.GptLive to (stringResource(R.string.voice_overlay_engine_gpt_live) to stringResource(R.string.voice_settings_gpt_live_desc)),
                     VoiceEngineMode.RealtimeAgent to ("Real-time Voice Agent" to "Low-latency provider-native conversation"),
                 ).forEach { (engine, copy) ->
                     val available = engine != VoiceEngineMode.RealtimeAgent || relayVoiceReady
@@ -5160,6 +5179,44 @@ private fun VoiceModePickerDialog(
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.settings_done)) } },
     )
+}
+
+@Composable
+private fun GptLiveSettingsCard(
+    voiceViewModel: VoiceViewModel,
+    connectionId: String?,
+    profileName: String?,
+) {
+    var status by remember(connectionId, profileName) {
+        mutableStateOf<com.hermesandroid.relay.network.shared.GptLiveStatus?>(null)
+    }
+    var error by remember(connectionId, profileName) { mutableStateOf<String?>(null) }
+    var checking by remember(connectionId, profileName) { mutableStateOf(true) }
+    var revision by remember { mutableStateOf(0) }
+    LaunchedEffect(connectionId, profileName, revision) {
+        checking = true
+        val result = voiceViewModel.gptLiveStatus()
+        status = result.getOrNull()
+        error = result.exceptionOrNull()?.message
+        checking = false
+    }
+    SectionCard(title = stringResource(R.string.voice_overlay_engine_gpt_live)) {
+        Text(stringResource(R.string.voice_settings_gpt_live_desc), style = MaterialTheme.typography.bodyMedium)
+        Text(stringResource(R.string.voice_settings_gpt_live_setup), style = MaterialTheme.typography.bodySmall)
+        ProviderRow(
+            label = stringResource(R.string.voice_settings_label_status),
+            value = if (checking) stringResource(R.string.voice_settings_status_checking)
+                else if (status?.available == true) stringResource(R.string.voice_settings_status_ready)
+                else error ?: status?.reason ?: stringResource(R.string.voice_settings_status_unsupported_build),
+        )
+        status?.let {
+            ProviderRow(stringResource(R.string.voice_settings_label_model), it.model)
+            ProviderRow(stringResource(R.string.voice_settings_label_voice), it.voice)
+        }
+        TextButton(onClick = { revision++ }, enabled = !checking) {
+            Text(stringResource(R.string.dashboard_refresh))
+        }
+    }
 }
 
 @Composable

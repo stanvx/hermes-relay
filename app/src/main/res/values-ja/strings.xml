@@ -4626,4 +4626,11 @@
     <string name="voice_streaming_stopped_basic_next">ストリーミング音声が停止しました。残りは基本音声を使用します。音声プロバイダーの設定を確認してください。</string>
     <string name="stats_tts_queue_wait">音声キューの待機時間</string>
     <string name="stats_tts_player_start">プレーヤーの開始遅延</string>
+    <string name="voice_overlay_engine_gpt_live">GPT-Live</string>
+    <string name="voice_overlay_gpt_live_mode">ライブ · 自動ターン検出</string>
+    <string name="voice_overlay_gpt_live_listening_action">GPT-Liveのマイクを一時停止</string>
+    <string name="voice_overlay_gpt_live_resume_action">GPT-Liveのマイクを再開</string>
+    <string name="voice_settings_gpt_live_desc">Codexのサブスクリプションで連続音声会話。Hermesがタスクを実行し、回答します。</string>
+    <string name="voice_settings_gpt_live_setup">Relayのダッシュボードプラグインとサーバー上のCodexログインを使用します。求められたら「管理」でログインしてください。従量課金APIへの切り替えはありません。</string>
+    <string name="voice_settings_gpt_live_controls">GPT-Liveは会話の区切りや割り込みを自動で検出します。マイクをタップすると聞き取りを一時停止または再開します。音声モードを閉じるとセッションが終了します。</string>
 </resources>

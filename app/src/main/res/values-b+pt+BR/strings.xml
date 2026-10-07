@@ -4474,4 +4474,11 @@
     <string name="voice_streaming_stopped_basic_next">A voz em streaming parou. O restante usará a voz básica. Confira as configurações do provedor de voz.</string>
     <string name="stats_tts_queue_wait">Espera na fila de áudio</string>
     <string name="stats_tts_player_start">Atraso ao iniciar o player</string>
+    <string name="voice_overlay_engine_gpt_live">GPT-Live</string>
+    <string name="voice_overlay_gpt_live_mode">Ao vivo · detecção automática de turnos</string>
+    <string name="voice_overlay_gpt_live_listening_action">Pausar o microfone do GPT-Live</string>
+    <string name="voice_overlay_gpt_live_resume_action">Retomar o microfone do GPT-Live</string>
+    <string name="voice_settings_gpt_live_desc">Conversa contínua com sua assinatura do Codex. Hermes executa tarefas e responde.</string>
+    <string name="voice_settings_gpt_live_setup">Usa o plugin do Relay para o painel e um login do Codex no servidor. Entre em Gerenciar se solicitado. Não há alternativa pela API cobrada por uso.</string>
+    <string name="voice_settings_gpt_live_controls">GPT-Live detecta turnos e interrupções automaticamente. Toque no microfone para pausar ou retomar a escuta; feche o modo de voz para encerrar a sessão.</string>
 </resources>

@@ -235,7 +235,10 @@ async def create_session(
         answer = response.content.decode("utf-8")
     except UnicodeError as exc:
         raise GptLiveRejected("GPT-Live returned an invalid SDP answer") from exc
-    validate_sdp(answer)
+    try:
+        validate_sdp(answer)
+    except ValueError as exc:
+        raise GptLiveRejected("GPT-Live returned an invalid SDP answer") from exc
     session_id = _call_id(response.headers)
     if auth.value in answer or account_id in answer:
         raise GptLiveRejected("GPT-Live SDP response reflected private credentials")

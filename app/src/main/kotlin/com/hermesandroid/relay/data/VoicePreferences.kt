@@ -118,7 +118,8 @@ data class EnhancedVoiceOverrides(
 
 enum class VoiceEngineMode(val storageValue: String) {
     HermesVoiceOutput("hermes_voice_output"),
-    RealtimeAgent("realtime_agent");
+    RealtimeAgent("realtime_agent"),
+    GptLive("gpt_live");
 
     companion object {
         fun fromStorage(value: String?): VoiceEngineMode =

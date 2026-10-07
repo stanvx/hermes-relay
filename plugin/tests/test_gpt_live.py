@@ -119,3 +119,22 @@ def test_create_session_does_not_echo_provider_body(monkeypatch):
     with pytest.raises(gpt_live.GptLiveRejected) as error:
         asyncio.run(run())
     assert token not in str(error.value)
+
+
+@pytest.mark.parametrize("offer", [None, "", "m=audio 9 UDP/TLS/RTP/SAVPF 111\r\n", "v=0\r\n", "v=0\r\nm=audio \x00"])
+def test_invalid_offer_is_rejected_before_authentication(monkeypatch, offer):
+    def unexpected_auth():
+        pytest.fail("Invalid SDP must not resolve credentials")
+    monkeypatch.setattr(gpt_live, "_resolve_codex_oauth_token", unexpected_auth)
+    with pytest.raises(ValueError):
+        asyncio.run(gpt_live.create_session(offer))
+
+
+def test_bad_provider_sdp_is_a_provider_failure(monkeypatch):
+    monkeypatch.setattr(gpt_live, "_resolve_codex_oauth_token", lambda: AuthToken(_oauth_token(), "test"))
+    async def run():
+        transport = httpx.MockTransport(lambda request: httpx.Response(201, text="invalid", headers={"openai-session-id": "rtc_test"}))
+        async with httpx.AsyncClient(transport=transport) as client:
+            return await gpt_live.create_session(OFFER, client=client)
+    with pytest.raises(gpt_live.GptLiveRejected, match="invalid SDP answer"):
+        asyncio.run(run())

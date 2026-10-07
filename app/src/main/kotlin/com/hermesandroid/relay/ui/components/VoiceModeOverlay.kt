@@ -52,6 +52,7 @@ import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.MicOff
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Stop
@@ -211,6 +212,7 @@ fun VoiceModeOverlay(
     val focusMicTap: () -> Unit = {
         dispatchVoiceMicTap(
             uiState = uiState,
+            liveMode = voiceEngineMode == "gpt_live",
             onStartListening = {
                 try {
                     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -414,6 +416,7 @@ fun VoiceModeOverlay(
                     ) {
                         VoiceFocusIdentityPane(
                             uiState = uiState,
+                            liveMode = voiceEngineMode == "gpt_live",
                             backgroundVisualizationEnabled = backgroundVisualizationEnabled,
                             onMicTap = focusMicTap,
                             onMicHoldPress = focusMicHoldPress,
@@ -458,6 +461,7 @@ fun VoiceModeOverlay(
                     ) {
                         VoiceFocusIdentityPane(
                             uiState = uiState,
+                            liveMode = voiceEngineMode == "gpt_live",
                             backgroundVisualizationEnabled = backgroundVisualizationEnabled,
                             onMicTap = focusMicTap,
                             onMicHoldPress = focusMicHoldPress,
@@ -539,6 +543,7 @@ fun VoiceModeOverlay(
         // that visually said "Stop" but was actually wired to "Start."
         VoiceMicButton(
             uiState = uiState,
+            liveMode = voiceEngineMode == "gpt_live",
             onTap = focusMicTap,
             onHoldPress = focusMicHoldPress,
             onHoldRelease = focusMicHoldRelease,
@@ -607,6 +612,7 @@ private fun VoiceErrorDialog(
 @Composable
 private fun VoiceFocusIdentityPane(
     uiState: VoiceUiState,
+    liveMode: Boolean,
     backgroundVisualizationEnabled: Boolean,
     onMicTap: () -> Unit,
     onMicHoldPress: () -> Unit,
@@ -647,6 +653,7 @@ private fun VoiceFocusIdentityPane(
             Spacer(Modifier.height(16.dp))
             VoiceMicButton(
                 uiState = uiState,
+                liveMode = liveMode,
                 onTap = onMicTap,
                 onHoldPress = onMicHoldPress,
                 onHoldRelease = onMicHoldRelease,
@@ -806,7 +813,10 @@ private fun VoiceMicButton(
 ) {
     if (!visible) return
 
-    val micActionDescription = when (uiState.state) {
+    val micActionDescription = if (liveMode) {
+        stringResource(if (uiState.gptLiveMuted || uiState.state == VoiceState.Idle || uiState.state == VoiceState.Error) R.string.voice_overlay_gpt_live_resume_action
+            else R.string.voice_overlay_gpt_live_listening_action)
+    } else when (uiState.state) {
         VoiceState.Idle, VoiceState.Error -> stringResource(R.string.voice_overlay_tap_action_idle)
         VoiceState.Listening ->
             if (liveMode) {
@@ -849,7 +859,9 @@ private fun VoiceMicButton(
         else -> MaterialTheme.colorScheme.primary
     }
 
-    val icon = when (uiState.state) {
+    val icon = if (liveMode) {
+        if (uiState.gptLiveMuted) Icons.Filled.MicOff else Icons.Filled.Mic
+    } else when (uiState.state) {
         VoiceState.Listening -> if (liveMode) Icons.Filled.Mic else Icons.Filled.Stop
         VoiceState.Transcribing, VoiceState.Thinking -> Icons.Filled.Stop
         // Stop icon makes the "tap to interrupt TTS" affordance obvious;
@@ -1540,6 +1552,7 @@ private fun ConversationVoiceMicButton(
         onTap = {
             dispatchVoiceMicTap(
                 uiState = uiState,
+                liveMode = liveMode,
                 onStartListening = onMicTap,
                 onStopListening = onMicRelease,
                 onInterrupt = onInterrupt,
@@ -1565,11 +1578,20 @@ private fun ConversationVoiceMicButton(
 
 internal fun dispatchVoiceMicTap(
     uiState: VoiceUiState,
+    liveMode: Boolean = false,
     onStartListening: () -> Unit,
     onStopListening: () -> Unit,
     onInterrupt: () -> Unit,
     onPauseAutoMode: () -> Unit,
 ) {
+    if (liveMode) {
+        if (uiState.gptLiveMuted || uiState.state == VoiceState.Idle || uiState.state == VoiceState.Error) {
+            onStartListening()
+        } else {
+            onPauseAutoMode()
+        }
+        return
+    }
     when (uiState.state) {
         VoiceState.Listening -> {
             if (uiState.interactionMode == InteractionMode.Continuous) {

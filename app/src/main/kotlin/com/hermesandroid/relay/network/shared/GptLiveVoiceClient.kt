@@ -47,10 +47,11 @@ interface GptLiveSession {
 }
 
 interface GptLiveVoiceClient {
-    suspend fun status(): Result<GptLiveStatus>
+    suspend fun status(requireSubscription: Boolean = false): Result<GptLiveStatus>
 
     suspend fun startSession(
         history: List<GptLiveHistoryMessage>,
         callbacks: GptLiveCallbacks,
+        requireSubscription: Boolean = false,
     ): Result<GptLiveSession>
 }

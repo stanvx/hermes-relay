@@ -46,6 +46,7 @@ import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.MicOff
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.HorizontalDivider
@@ -391,6 +392,7 @@ internal fun VoiceFloatingOverlayPill(
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 VoiceFloatingOverlayBubble(
                     uiState = uiState,
+                    liveMode = session.engineMode == "gpt_live",
                     stateText = stateText,
                     onExpand = { minimized = false },
                     onStartListening = session.onStartListening,
@@ -519,6 +521,7 @@ private fun VoiceOverlayHeader(
         }
         MicControlButton(
             uiState = uiState,
+            liveMode = session.engineMode == "gpt_live",
             onStartListening = session.onStartListening,
             onStopListening = session.onStopListening,
             onInterrupt = session.onInterrupt,
@@ -756,6 +759,7 @@ private fun overlayPrimaryText(uiState: VoiceUiState, fallback: String): String 
 @Composable
 internal fun VoiceFloatingOverlayBubble(
     uiState: VoiceUiState,
+    liveMode: Boolean = false,
     stateText: String,
     onExpand: () -> Unit,
     onStartListening: () -> Unit,
@@ -766,7 +770,10 @@ internal fun VoiceFloatingOverlayBubble(
 ) {
     val isHot = uiState.state == VoiceState.Listening || uiState.state == VoiceState.Speaking
     val stateLabel = overlayBubbleStateLabel(uiState.state)
-    val tapAction = when (uiState.state) {
+    val tapAction = if (liveMode) {
+        stringResource(if (uiState.gptLiveMuted || uiState.state == VoiceState.Idle || uiState.state == VoiceState.Error) R.string.voice_overlay_gpt_live_resume_action
+            else R.string.voice_overlay_gpt_live_listening_action)
+    } else when (uiState.state) {
         VoiceState.Idle, VoiceState.Error -> stringResource(R.string.voice_overlay_tap_action_idle)
         VoiceState.Listening -> stringResource(R.string.voice_overlay_tap_action_listening)
         VoiceState.Speaking ->
@@ -783,12 +790,14 @@ internal fun VoiceFloatingOverlayBubble(
         VoiceState.Error -> MaterialTheme.colorScheme.error
         VoiceState.Idle -> MaterialTheme.colorScheme.primary
     }
-    val icon = when (uiState.state) {
+    val icon = if (liveMode) {
+        if (uiState.gptLiveMuted) Icons.Filled.MicOff else Icons.Filled.Mic
+    } else when (uiState.state) {
         VoiceState.Listening, VoiceState.Speaking -> Icons.Filled.Stop
         VoiceState.Transcribing, VoiceState.Thinking -> Icons.Filled.Stop
         VoiceState.Idle, VoiceState.Error -> Icons.Filled.Mic
     }
-    val bubbleGesture = if (uiState.interactionMode == InteractionMode.HoldToTalk) {
+    val bubbleGesture = if (!liveMode && uiState.interactionMode == InteractionMode.HoldToTalk) {
         Modifier.voiceHoldGesture(
             state = uiState.state,
             inactiveActionLabel = tapAction,
@@ -812,6 +821,7 @@ internal fun VoiceFloatingOverlayBubble(
             onClick = {
                 dispatchVoiceMicTap(
                     uiState = uiState,
+                    liveMode = liveMode,
                     onStartListening = onStartListening,
                     onStopListening = onStopListening,
                     onInterrupt = onInterrupt,
@@ -858,7 +868,7 @@ internal fun VoiceFloatingOverlayBubble(
             ) {
                 Icon(
                     imageVector = icon,
-                    contentDescription = if (uiState.interactionMode == InteractionMode.HoldToTalk) {
+                    contentDescription = if (!liveMode && uiState.interactionMode == InteractionMode.HoldToTalk) {
                         null
                     } else {
                         stringResource(R.string.voice_overlay_a11y, stateText, tapAction)
@@ -876,7 +886,7 @@ internal fun VoiceFloatingOverlayBubble(
                 )
             }
         }
-        if (uiState.interactionMode == InteractionMode.HoldToTalk) {
+        if (!liveMode && uiState.interactionMode == InteractionMode.HoldToTalk) {
             IconButton(
                 onClick = onExpand,
                 modifier = Modifier
@@ -1016,6 +1026,7 @@ private fun overlayBubbleStateLabel(state: VoiceState): String = when (state) {
 @Composable
 internal fun MicControlButton(
     uiState: VoiceUiState,
+    liveMode: Boolean = false,
     onStartListening: () -> Unit,
     onStopListening: () -> Unit,
     onInterrupt: () -> Unit,
@@ -1026,7 +1037,10 @@ internal fun MicControlButton(
         uiState.state == VoiceState.Speaking ||
         uiState.state == VoiceState.Transcribing ||
         uiState.state == VoiceState.Thinking
-    val actionDescription = when (uiState.state) {
+    val actionDescription = if (liveMode) {
+        stringResource(if (uiState.gptLiveMuted || uiState.state == VoiceState.Idle || uiState.state == VoiceState.Error) R.string.voice_overlay_gpt_live_resume_action
+            else R.string.voice_overlay_gpt_live_listening_action)
+    } else when (uiState.state) {
         VoiceState.Idle, VoiceState.Error -> stringResource(R.string.voice_overlay_tap_action_idle)
         VoiceState.Listening ->
             if (uiState.interactionMode == InteractionMode.Continuous) {
@@ -1042,7 +1056,7 @@ internal fun MicControlButton(
             }
     }
     val holdStopDescription = stringResource(R.string.voice_overlay_tap_action_listening)
-    val gestureModifier = if (uiState.interactionMode == InteractionMode.HoldToTalk) {
+    val gestureModifier = if (!liveMode && uiState.interactionMode == InteractionMode.HoldToTalk) {
         Modifier.voiceHoldGesture(
             state = uiState.state,
             inactiveActionLabel = actionDescription,
@@ -1063,6 +1077,7 @@ internal fun MicControlButton(
         Modifier.clickable {
             dispatchVoiceMicTap(
                 uiState = uiState,
+                liveMode = liveMode,
                 onStartListening = onStartListening,
                 onStopListening = onStopListening,
                 onInterrupt = onInterrupt,
@@ -1078,6 +1093,7 @@ internal fun MicControlButton(
             .then(gestureModifier),
         shape = CircleShape,
         color = when {
+            liveMode -> MaterialTheme.colorScheme.primary
             isStopAction -> Color(0xFFE53935)
             uiState.state == VoiceState.Transcribing || uiState.state == VoiceState.Thinking ->
                 Color(0xFFE53935)
@@ -1089,12 +1105,14 @@ internal fun MicControlButton(
         Box(contentAlignment = Alignment.Center) {
             Icon(
                 imageVector = when {
+                    liveMode && uiState.gptLiveMuted -> Icons.Filled.MicOff
+                    liveMode -> Icons.Filled.Mic
                     isStopAction -> Icons.Filled.Stop
                     uiState.state == VoiceState.Transcribing || uiState.state == VoiceState.Thinking ->
                         Icons.Filled.Stop
                     else -> Icons.Filled.Mic
                 },
-                contentDescription = if (uiState.interactionMode == InteractionMode.HoldToTalk) {
+                contentDescription = if (!liveMode && uiState.interactionMode == InteractionMode.HoldToTalk) {
                     null
                 } else {
                     actionDescription
@@ -1151,6 +1169,7 @@ private fun voiceProviderLabel(
 
 @Composable
 private fun voiceEngineLabel(engineMode: String?): String = when (engineMode) {
+    "gpt_live" -> stringResource(R.string.voice_overlay_engine_gpt_live)
     "realtime_agent" -> stringResource(R.string.voice_overlay_engine_realtime)
     "hermes_voice_output" -> stringResource(R.string.voice_overlay_engine_standard)
     null, "" -> stringResource(R.string.voice_overlay_engine_placeholder)

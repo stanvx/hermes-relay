@@ -21,6 +21,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- GPT-Live subscription voice now has an explicit engine selection, consistent microphone pause/resume, bounded Unicode text, and session cleanup with visible startup errors.
+
 - Android composer placeholder uses readable secondary text; Clean composer options scroll in short windows and at larger text sizes.
 - Android Material container colors stay consistent over nested surfaces, preserving their intended text contrast.
 - Windows CLI+UI installation correctly selects its latest release when GitHub returns Android and Plugin releases on the same page, including when discovery needs multiple pages.

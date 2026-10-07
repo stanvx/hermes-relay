@@ -3415,9 +3415,6 @@
     <string name="voice_overlay_provider_output_off">output off</string>
     <string name="voice_overlay_provider_placeholder">provider ...</string>
     <string name="voice_overlay_engine_realtime">Realtime Agent</string>
-    <string name="voice_overlay_engine_gpt_live">GPT-Live</string>
-    <string name="voice_overlay_gpt_live_mode">Live · automatic turn detection</string>
-    <string name="voice_overlay_gpt_live_listening_action">GPT-Live is listening continuously; tap to respond now</string>
     <string name="voice_overlay_engine_hermes">Hermes voice</string>
     <string name="voice_overlay_engine_placeholder">Voice engine ...</string>
 
@@ -4692,4 +4689,11 @@
     <string name="voice_streaming_stopped_basic_next">Streaming voice stopped. Remaining speech will use basic speech. Check the voice provider settings.</string>
     <string name="stats_tts_queue_wait">Audio queue wait</string>
     <string name="stats_tts_player_start">Player start delay</string>
+    <string name="voice_overlay_engine_gpt_live">GPT-Live</string>
+    <string name="voice_overlay_gpt_live_mode">Live · automatic turn detection</string>
+    <string name="voice_overlay_gpt_live_listening_action">Pause GPT-Live microphone</string>
+    <string name="voice_overlay_gpt_live_resume_action">Resume GPT-Live microphone</string>
+    <string name="voice_settings_gpt_live_desc">Continuous voice with your Codex subscription. Hermes handles tasks and answers.</string>
+    <string name="voice_settings_gpt_live_setup">Uses the Relay dashboard plugin and a Codex login on the server. Sign in under Manage if requested. No metered API fallback.</string>
+    <string name="voice_settings_gpt_live_controls">GPT-Live detects turns and interruptions automatically. Tap the microphone to pause or resume listening; close voice to end the session.</string>
 </resources>

@@ -18,6 +18,11 @@ class VoiceEngineModeTest {
     }
 
     @Test
+    fun fromStorage_readsExplicitGptLiveSelection() {
+        assertEquals(VoiceEngineMode.GptLive, VoiceEngineMode.fromStorage("gpt_live"))
+    }
+
+    @Test
     fun fromStorage_readsRealtimeAgent() {
         assertEquals(
             VoiceEngineMode.RealtimeAgent,
