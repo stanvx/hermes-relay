@@ -2663,6 +2663,8 @@
     <string name="voice_overlay_overlay">Overlay</string>
     <string name="voice_overlay_exit">Exit</string>
     <string name="voice_overlay_settings_cd">Voice settings</string>
+    <string name="voice_options_cd">Voice options</string>
+    <string name="voice_options_pop_out">Pop out over other apps</string>
     <string name="voice_overlay_retry">Retry</string>
     <string name="voice_overlay_mic_cd">Voice mic</string>
     <string name="voice_overlay_allow">Allow</string>

@@ -2303,6 +2303,8 @@
     <string name="voice_overlay_overlay">かぶせる</string>
     <string name="voice_overlay_exit">出口</string>
     <string name="voice_overlay_settings_cd">音声設定</string>
+    <string name="voice_options_cd">音声オプション</string>
+    <string name="voice_options_pop_out">他のアプリの上に表示</string>
     <string name="voice_overlay_retry">リトライ</string>
     <string name="voice_overlay_mic_cd">音声マイク</string>
     <string name="voice_overlay_allow">許可する</string>

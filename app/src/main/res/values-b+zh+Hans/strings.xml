@@ -2287,6 +2287,8 @@
     <string name="voice_overlay_overlay">浮窗</string>
     <string name="voice_overlay_exit">退出</string>
     <string name="voice_overlay_settings_cd">语音设置</string>
+    <string name="voice_options_cd">语音选项</string>
+    <string name="voice_options_pop_out">在其他应用上方显示</string>
     <string name="voice_overlay_retry">重试</string>
     <string name="voice_overlay_mic_cd">语音麦克风</string>
     <string name="voice_overlay_allow">允许</string>

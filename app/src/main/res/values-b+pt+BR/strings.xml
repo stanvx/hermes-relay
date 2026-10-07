@@ -2198,6 +2198,8 @@
     <string name="voice_overlay_overlay">Sobreposição</string>
     <string name="voice_overlay_exit">Sair</string>
     <string name="voice_overlay_settings_cd">Configurações de voz</string>
+    <string name="voice_options_cd">Opções de voz</string>
+    <string name="voice_options_pop_out">Mostrar sobre outros apps</string>
     <string name="voice_overlay_retry">Tentar novamente</string>
     <string name="voice_overlay_mic_cd">Microfone de voz</string>
     <string name="voice_overlay_allow">Permitir</string>

@@ -2097,6 +2097,8 @@
     <string name="voice_overlay_overlay">Cubrir</string>
     <string name="voice_overlay_exit">Salida</string>
     <string name="voice_overlay_settings_cd">Configuraciones de voz</string>
+    <string name="voice_options_cd">Opciones de voz</string>
+    <string name="voice_options_pop_out">Mostrar sobre otras apps</string>
     <string name="voice_overlay_retry">Rever</string>
     <string name="voice_overlay_mic_cd">micrófono de voz</string>
     <string name="voice_overlay_allow">Permitir</string>

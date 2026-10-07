@@ -2301,6 +2301,8 @@
     <string name="voice_overlay_overlay">Наложение</string>
     <string name="voice_overlay_exit">Выход</string>
     <string name="voice_overlay_settings_cd">Настройки голоса</string>
+    <string name="voice_options_cd">Параметры голоса</string>
+    <string name="voice_options_pop_out">Показать поверх других приложений</string>
     <string name="voice_overlay_retry">Повторить</string>
     <string name="voice_overlay_mic_cd">Микрофон голоса</string>
     <string name="voice_overlay_allow">Разрешить</string>

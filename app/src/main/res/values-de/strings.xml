@@ -2293,6 +2293,8 @@
     <string name="voice_overlay_overlay">Overlay</string>
     <string name="voice_overlay_exit">Beenden</string>
     <string name="voice_overlay_settings_cd">Spracheinstellungen</string>
+    <string name="voice_options_cd">Sprachoptionen</string>
+    <string name="voice_options_pop_out">Über anderen Apps einblenden</string>
     <string name="voice_overlay_retry">Erneut versuchen</string>
     <string name="voice_overlay_mic_cd">Sprachmikrofon</string>
     <string name="voice_overlay_allow">Erlauben</string>
