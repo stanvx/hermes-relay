@@ -223,6 +223,7 @@ class StandardGptLiveVoiceClient(
             override fun onResponse(call: Call, response: Response) {
                 val result = runCatching {
                     response.use {
+                        Log.d("AndroidGptLive", "$operation HTTP ${it.code}")
                         val body = it.body.string()
                         if (it.code == 404 && allow404) return@use null
                         if (!it.isSuccessful) throw IOException(
@@ -318,6 +319,7 @@ private class AndroidGptLiveSession(
                     (receiver.track() as? AudioTrack)?.setEnabled(true)
                 }
                 override fun onConnectionChange(newState: PeerConnection.PeerConnectionState) {
+                    Log.d(TAG, "Peer state=$newState")
                     if (newState == PeerConnection.PeerConnectionState.FAILED ||
                         newState == PeerConnection.PeerConnectionState.DISCONNECTED
                     ) {
@@ -340,6 +342,7 @@ private class AndroidGptLiveSession(
         channel.registerObserver(object : DataChannel.Observer {
             override fun onBufferedAmountChange(previousAmount: Long) = Unit
             override fun onStateChange() {
+                Log.d(TAG, "Control channel state=${channel.state()}")
                 if (channel.state() == DataChannel.State.CLOSED && !finished.get()) {
                     finish("connection_lost", null)
                 }
@@ -360,11 +363,13 @@ private class AndroidGptLiveSession(
         val answer = createSession(sdp)
         sessionId = answer.sessionId
         eventDialect = answer.eventDialect
+        Log.d(TAG, "SDP negotiated dialect=$eventDialect")
         setRemoteDescription(
             localPeer,
             SessionDescription(SessionDescription.Type.ANSWER, answer.sdp),
         )
         withTimeout(15_000L) { ready.await() }
+        Log.d(TAG, "Session ready")
     }
 
     override fun speak(delegationId: String?, content: String) {
@@ -474,6 +479,7 @@ private class AndroidGptLiveSession(
 
     private fun handleEvent(raw: String) {
         val event = runCatching { json.decodeFromString<JsonObject>(raw) }.getOrNull() ?: return
+        Log.d(TAG, "Received event=${event.string("type")}")
         when (event.string("type")) {
             "session.started" -> {
                 started = true
@@ -547,6 +553,7 @@ private class AndroidGptLiveSession(
             }
             "error" -> {
                 val error = event["error"] as? JsonObject
+                Log.w(TAG, "Provider error code=${error?.string("code")}")
                 if (error?.string("code") == "context_injection_incomplete") return
                 callbacks.onError(error?.string("message") ?: "GPT-Live error", false)
             }
@@ -565,6 +572,7 @@ private class AndroidGptLiveSession(
 
     private fun finish(reason: String, usageSeconds: Double?) {
         if (!finished.compareAndSet(false, true)) return
+        Log.d(TAG, "Session closed reason=$reason")
         started = false
         ready.completeExceptionally(IOException("GPT-Live session closed: $reason"))
         // WebRTC forbids disposing peers on their own Observer callback stack.
