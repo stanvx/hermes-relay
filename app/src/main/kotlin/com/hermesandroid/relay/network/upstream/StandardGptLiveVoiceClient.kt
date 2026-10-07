@@ -2,14 +2,22 @@ package com.hermesandroid.relay.network.upstream
 
 import android.content.Context
 import android.util.Log
+import com.hermesandroid.relay.audio.voicePlaybackAudioAttributes
 import com.hermesandroid.relay.network.shared.GptLiveCallbacks
 import com.hermesandroid.relay.network.shared.GptLiveHistoryMessage
 import com.hermesandroid.relay.network.shared.GptLiveSession
 import com.hermesandroid.relay.network.shared.GptLiveStatus
 import com.hermesandroid.relay.network.shared.GptLiveTranscriptFragment
 import com.hermesandroid.relay.network.shared.GptLiveVoiceClient
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
@@ -22,6 +30,11 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
+import okhttp3.Call
+import okhttp3.Callback
+import okhttp3.Response
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -64,23 +77,33 @@ class StandardGptLiveVoiceClient(
     },
 ) : GptLiveVoiceClient {
 
-    override suspend fun status(): Result<GptLiveStatus> = withContext(Dispatchers.IO) {
+    override suspend fun status(requireSubscription: Boolean): Result<GptLiveStatus> = withContext(Dispatchers.IO) {
         runCatching {
             val base = dashboardBaseUrl()
                 ?: throw IOException("Hermes dashboard URL not configured")
-            val url = standardHermesAudioUrl(
-                base,
-                "/api/audio/voice-live/status",
-                activeProfile(),
-            ) ?: throw IOException("Hermes dashboard URL is not a valid address: $base")
-            val request = Request.Builder().url(url).get().build()
-            val root = executeJson(request, "GPT-Live status", base)
+            fun request(path: String) = Request.Builder().url(
+                standardHermesAudioUrl(base, path, activeProfile())
+                    ?: throw IOException("Hermes dashboard URL is invalid"),
+            ).get().build()
+            val hostRoot = if (requireSubscription) null else executeJson(
+                request("/api/audio/voice-live/status"), "GPT-Live status", base,
+            )
+            val relayRoot = if (requireSubscription || hostRoot?.string("mode") == "gpt-live") {
+                executeJsonOrNullOn404(
+                    request("/api/plugins/hermes-relay/voice-live/status"),
+                    "Relay GPT-Live status", base,
+                )
+            } else null
+            val root = relayRoot ?: hostRoot
+                ?: throw IOException("GPT-Live subscription requires the Hermes Relay dashboard plugin")
             GptLiveStatus(
                 mode = root.string("mode") ?: "chained",
                 available = root.boolean("available") ?: false,
                 reason = root.string("reason"),
                 model = root.string("model") ?: "gpt-live-1",
                 voice = root.string("voice") ?: "marin",
+                authMode = root.string("auth_mode"),
+                eventDialect = root.string("event_dialect") ?: "public",
             )
         }
     }
@@ -88,24 +111,38 @@ class StandardGptLiveVoiceClient(
     override suspend fun startSession(
         history: List<GptLiveHistoryMessage>,
         callbacks: GptLiveCallbacks,
-    ): Result<GptLiveSession> = runCatching {
+        requireSubscription: Boolean,
+    ): Result<GptLiveSession> {
         val base = dashboardBaseUrl()
-            ?: throw IOException("Hermes dashboard URL not configured")
+            ?: return Result.failure(IOException("Hermes dashboard URL not configured"))
         val transport = AndroidGptLiveSession(
             context = context,
             callbacks = callbacks,
-            createSession = { sdp -> createSession(base, history, sdp) },
+            createSession = { sdp -> createSession(base, history, sdp, requireSubscription) },
             json = json,
         )
-        transport.start()
-        transport
+        return try {
+            transport.start()
+            currentCoroutineContext().ensureActive()
+            Result.success(transport)
+        } catch (error: Throwable) {
+            transport.close()
+            if (error is CancellationException) throw error
+            Result.failure(error)
+        }
     }
 
     private suspend fun createSession(
         baseUrl: String,
         history: List<GptLiveHistoryMessage>,
         sdp: String,
+        requireSubscription: Boolean,
     ): LiveSessionAnswer = withContext(Dispatchers.IO) {
+        val relayUrl = standardHermesAudioUrl(
+            baseUrl,
+            "/api/plugins/hermes-relay/voice-live/session",
+            activeProfile(),
+        ) ?: throw IOException("Hermes dashboard URL is not a valid address: $baseUrl")
         val url = standardHermesAudioUrl(
             baseUrl,
             "/api/audio/voice-live/session",
@@ -135,40 +172,75 @@ class StandardGptLiveVoiceClient(
             put("sdp", sdp)
             put("history", historyJson)
         }
-        val request = Request.Builder()
-            .url(url)
+        val relayRequest = Request.Builder()
+            .url(relayUrl)
             .post(json.encodeToString(JsonObject.serializer(), payload).toRequestBody(JSON_MEDIA))
             .header("Accept", "application/json")
             .build()
-        val root = executeJson(request, "GPT-Live session creation", baseUrl)
+        val root = executeJsonOrNullOn404(
+            relayRequest,
+            "Relay GPT-Live session creation",
+            baseUrl,
+        ) ?: if (requireSubscription) {
+            throw IOException("GPT-Live subscription requires the Hermes Relay dashboard plugin")
+        } else executeJson(
+            Request.Builder()
+                .url(url)
+                .post(json.encodeToString(JsonObject.serializer(), payload).toRequestBody(JSON_MEDIA))
+                .header("Accept", "application/json")
+                .build(),
+            "GPT-Live session creation",
+            baseUrl,
+        )
         val sessionId = (root["session"] as? JsonObject)?.string("id")
         val transport = root["transport"] as? JsonObject
             ?: throw IOException("GPT-Live session response missing transport")
         val answer = transport.string("sdp")
             ?: throw IOException("GPT-Live session response missing SDP answer")
-        LiveSessionAnswer(sessionId, answer)
+        LiveSessionAnswer(
+            sessionId = sessionId,
+            sdp = answer,
+            eventDialect = root.string("event_dialect") ?: "public",
+        )
     }
 
-    private fun executeJson(request: Request, operation: String, baseUrl: String): JsonObject {
-        val client = standardHermesDashboardAudioClient(dashboardHttpClientProvider(baseUrl), 180L)
-        client.newCall(request).execute().use { response ->
-            val body = response.body.string()
-            if (!response.isSuccessful) {
-                throw IOException(
-                    when (response.code) {
-                        401, 403 -> "$operation needs dashboard sign-in"
-                        404 -> "$operation is unavailable on this Hermes build"
-                        502, 503 -> "$operation is unavailable: ${body.take(500)}"
-                        else -> "$operation failed (HTTP ${response.code}): ${body.take(500)}"
-                    },
-                )
+    private suspend fun executeJson(request: Request, operation: String, baseUrl: String): JsonObject =
+        executeJsonOrNullOn404(request, operation, baseUrl, allow404 = false)
+            ?: throw IOException("$operation is unavailable")
+
+    private suspend fun executeJsonOrNullOn404(
+        request: Request,
+        operation: String,
+        baseUrl: String,
+        allow404: Boolean = true,
+    ): JsonObject? = suspendCancellableCoroutine { continuation ->
+        val call = dashboardHttpClientProvider(baseUrl).newCall(request)
+        call.timeout().timeout(45L, java.util.concurrent.TimeUnit.SECONDS)
+        continuation.invokeOnCancellation { call.cancel() }
+        call.enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                if (continuation.isActive) continuation.resumeWithException(e)
             }
-            val root = json.decodeFromString<JsonObject>(body)
-            if (root.boolean("ok") == false) {
-                throw IOException(root.string("detail") ?: root.string("error") ?: "$operation failed")
+            override fun onResponse(call: Call, response: Response) {
+                val result = runCatching {
+                    response.use {
+                        Log.d("AndroidGptLive", "$operation HTTP ${it.code}")
+                        val body = it.body.string()
+                        if (it.code == 404 && allow404) return@use null
+                        if (!it.isSuccessful) {
+                            Log.d("AndroidGptLive", "$operation error body: ${body.take(500)}")
+                            throw IOException(gptLiveHttpErrorMessage(operation, it.code, body))
+                        }
+                        json.decodeFromString<JsonObject>(body).also { root ->
+                            if (root.boolean("ok") == false) {
+                                throw IOException(root.string("detail") ?: root.string("error") ?: "$operation failed")
+                            }
+                        }
+                    }
+                }
+                if (continuation.isActive) continuation.resumeWith(result)
             }
-            return root
-        }
+        })
     }
 
     private fun dashboardBaseUrl(): String? =
@@ -182,7 +254,39 @@ class StandardGptLiveVoiceClient(
     }
 }
 
-private data class LiveSessionAnswer(val sessionId: String?, val sdp: String)
+/**
+ * User-facing message for a failed GPT-Live HTTP call. Proxy error pages
+ * (for example a gateway's JSON or HTML 502 body) stay in the log; only a
+ * short server-provided `detail`/`error` string is shown.
+ */
+internal fun gptLiveHttpErrorMessage(operation: String, code: Int, body: String): String {
+    val unavailable = "$operation failed: Hermes server unavailable (HTTP $code)"
+    if (code == 401 || code == 403) return "$operation needs dashboard sign-in"
+    if (code == 404) return "$operation is unavailable on this Hermes build"
+    // Proxies replace origin 502/504 bodies with their own error pages.
+    if (code == 502 || code == 504) return unavailable
+    val detail = runCatching {
+        val root = Json.parseToJsonElement(body) as? JsonObject
+        listOf("detail", "error").firstNotNullOfOrNull { key ->
+            (root?.get(key) as? JsonPrimitive)
+                ?.takeIf { primitive -> primitive.isString }
+                ?.content
+                ?.trim()
+                ?.takeIf { text -> text.isNotEmpty() && text.length <= 200 }
+        }
+    }.getOrNull()
+    return when {
+        detail != null -> "$operation failed (HTTP $code): $detail"
+        code == 503 -> unavailable
+        else -> "$operation failed (HTTP $code)"
+    }
+}
+
+private data class LiveSessionAnswer(
+    val sessionId: String?,
+    val sdp: String,
+    val eventDialect: String = "public",
+)
 
 private class AndroidGptLiveSession(
     context: Context,
@@ -195,13 +299,15 @@ private class AndroidGptLiveSession(
     private val eventCounter = AtomicInteger(0)
     private val iceGatheringComplete = CompletableDeferred<Unit>()
     private val transcript = mutableListOf<GptLiveTranscriptFragment>()
-    private var audioDeviceModule = JavaAudioDeviceModule.builder(appContext).createAudioDeviceModule()
+    private var audioDeviceModule: JavaAudioDeviceModule? = null
+    private val ready = CompletableDeferred<Unit>()
     private var factory: PeerConnectionFactory? = null
     private var peer: PeerConnection? = null
     private var audioSource: AudioSource? = null
     private var microphoneTrack: AudioTrack? = null
     private var events: DataChannel? = null
     private var started = false
+    private var eventDialect: String = "public"
 
     @Volatile
     override var sessionId: String? = null
@@ -212,6 +318,9 @@ private class AndroidGptLiveSession(
 
     suspend fun start() {
         ensureWebRtcInitialized(appContext)
+        audioDeviceModule = JavaAudioDeviceModule.builder(appContext)
+            .setAudioAttributes(voicePlaybackAudioAttributes())
+            .createAudioDeviceModule()
         val localFactory = PeerConnectionFactory.builder()
             .setAudioDeviceModule(audioDeviceModule)
             .createPeerConnectionFactory()
@@ -238,6 +347,7 @@ private class AndroidGptLiveSession(
                     (receiver.track() as? AudioTrack)?.setEnabled(true)
                 }
                 override fun onConnectionChange(newState: PeerConnection.PeerConnectionState) {
+                    Log.d(TAG, "Peer state=$newState")
                     if (newState == PeerConnection.PeerConnectionState.FAILED ||
                         newState == PeerConnection.PeerConnectionState.DISCONNECTED
                     ) {
@@ -260,6 +370,7 @@ private class AndroidGptLiveSession(
         channel.registerObserver(object : DataChannel.Observer {
             override fun onBufferedAmountChange(previousAmount: Long) = Unit
             override fun onStateChange() {
+                Log.d(TAG, "Control channel state=${channel.state()}")
                 if (channel.state() == DataChannel.State.CLOSED && !finished.get()) {
                     finish("connection_lost", null)
                 }
@@ -279,13 +390,34 @@ private class AndroidGptLiveSession(
             ?: throw IOException("GPT-Live WebRTC offer has no SDP")
         val answer = createSession(sdp)
         sessionId = answer.sessionId
+        eventDialect = answer.eventDialect
+        Log.d(TAG, "SDP negotiated dialect=$eventDialect")
         setRemoteDescription(
             localPeer,
             SessionDescription(SessionDescription.Type.ANSWER, answer.sdp),
         )
+        withTimeout(15_000L) { ready.await() }
+        Log.d(TAG, "Session ready")
     }
 
     override fun speak(delegationId: String?, content: String) {
+        if (eventDialect == "subscription" && delegationId != null) {
+            chunkSubscriptionText(content).forEach { chunk ->
+                send(buildJsonObject {
+                    put("type", "delegation.context.append")
+                    put("event_id", nextEventId("say"))
+                    put("delegation_item_id", delegationId)
+                    put("channel", "speakable")
+                    put("content", buildJsonArray {
+                        add(buildJsonObject {
+                            put("type", "input_text")
+                            put("text", chunk)
+                        })
+                    })
+                })
+            }
+            return
+        }
         chunkCommentary(content).forEach { chunk ->
             send(buildJsonObject {
                 put("type", "session.commentary.append")
@@ -299,6 +431,23 @@ private class AndroidGptLiveSession(
     override fun think(delegationId: String?, content: String) {
         val clean = content.replace(Regex("\\s+"), " ").trim().take(APPEND_CHAR_LIMIT)
         if (clean.isBlank()) return
+        if (eventDialect == "subscription" && delegationId != null) {
+            chunkSubscriptionText(clean).forEach { chunk ->
+                send(buildJsonObject {
+                    put("type", "delegation.context.append")
+                    put("event_id", nextEventId("think"))
+                    put("delegation_item_id", delegationId)
+                    put("channel", "commentary")
+                    put("content", buildJsonArray {
+                        add(buildJsonObject {
+                            put("type", "input_text")
+                            put("text", chunk)
+                        })
+                    })
+                })
+            }
+            return
+        }
         send(buildJsonObject {
             put("type", "session.thinking.append")
             put("event_id", nextEventId("think"))
@@ -310,6 +459,18 @@ private class AndroidGptLiveSession(
     override fun instruct(content: String) {
         val clean = content.trim().take(APPEND_CHAR_LIMIT)
         if (clean.isBlank()) return
+        if (eventDialect == "subscription") {
+            send(buildJsonObject {
+                put("type", "session.context.append")
+                put("content", buildJsonArray {
+                    add(buildJsonObject {
+                        put("type", "input_text")
+                        put("text", clean)
+                    })
+                })
+            })
+            return
+        }
         send(buildJsonObject {
             put("type", "session.instructions.append")
             put("event_id", nextEventId("instr"))
@@ -319,6 +480,12 @@ private class AndroidGptLiveSession(
 
     override fun setMuted(muted: Boolean) {
         microphoneTrack?.setEnabled(!muted)
+        if (eventDialect == "subscription") {
+            send(buildJsonObject {
+                put("type", if (muted) "input_audio.pause" else "input_audio.resume")
+            })
+            return
+        }
         send(buildJsonObject {
             put("type", if (muted) "session.input_audio.mute" else "session.input_audio.unmute")
             put("event_id", nextEventId(if (muted) "mute" else "unmute"))
@@ -327,9 +494,8 @@ private class AndroidGptLiveSession(
 
     override fun close() {
         if (finished.get()) return
-        if (!send(buildJsonObject { put("type", "session.close") })) {
-            finish("close_requested", null)
-        }
+        send(buildJsonObject { put("type", "session.close") })
+        finish("close_requested", null)
     }
 
     private fun send(event: JsonObject): Boolean {
@@ -341,9 +507,12 @@ private class AndroidGptLiveSession(
 
     private fun handleEvent(raw: String) {
         val event = runCatching { json.decodeFromString<JsonObject>(raw) }.getOrNull() ?: return
+        Log.d(TAG, "Received event=${event.string("type")}")
+        gptLiveSpeakingChange(event)?.let(callbacks.onSpeakingChanged)
         when (event.string("type")) {
             "session.started" -> {
                 started = true
+                ready.complete(Unit)
                 sessionId = (event["session"] as? JsonObject)?.string("id") ?: sessionId
             }
             "session.input_transcript.delta", "session.output_transcript.delta" -> {
@@ -362,12 +531,55 @@ private class AndroidGptLiveSession(
                 if (transcript.size > 2_000) transcript.subList(0, transcript.size - 1_500).clear()
                 callbacks.onTranscript(fragment)
             }
+            "input_transcript.added", "output_transcript.added" -> {
+                val type = event.string("type") ?: return
+                val item = event["item"] as? JsonObject ?: return
+                val text = item.string("text").orEmpty()
+                if (text.isBlank()) return
+                val fragment = GptLiveTranscriptFragment(
+                    speaker = if (type == "input_transcript.added") {
+                        GptLiveTranscriptFragment.Speaker.User
+                    } else {
+                        GptLiveTranscriptFragment.Speaker.Assistant
+                    },
+                    text = text,
+                    startMs = item.long("start_ms") ?: 0L,
+                    endMs = item.long("end_ms") ?: 0L,
+                )
+                transcript += fragment
+                if (transcript.size > 2_000) transcript.subList(0, transcript.size - 1_500).clear()
+                callbacks.onTranscript(fragment)
+            }
+            // Subscription v3 also emits turn.done, but its transcript may be
+            // partial and can arrive after input/output_transcript.added deltas.
+            // Treating it as another transcript fragment duplicates spoken
+            // text and can corrupt a delegated prompt, so it is bookkeeping only.
+            "turn.done" -> Unit
             "session.delegation.created" -> {
                 val id = (event["delegation"] as? JsonObject)?.string("id") ?: return
-                callbacks.onDelegation(id, contextWindow())
+                callbacks.onDelegation(id, null, contextWindow())
+            }
+            "delegation.created" -> {
+                val item = event["item"] as? JsonObject ?: return
+                if (item.string("target") != "client" || item.string("type") != "delegation") return
+                val id = item.string("id") ?: return
+                val prompt = (item["content"] as? JsonArray)
+                    ?.mapNotNull { part ->
+                        val objectPart = part as? JsonObject ?: return@mapNotNull null
+                        if (objectPart.string("type") == "input_text") {
+                            objectPart.string("text")
+                        } else {
+                            null
+                        }
+                    }
+                    ?.joinToString("")
+                    ?.trim()
+                    .orEmpty()
+                callbacks.onDelegation(id, prompt.takeIf { it.isNotBlank() }, contextWindow())
             }
             "error" -> {
                 val error = event["error"] as? JsonObject
+                Log.w(TAG, "Provider error code=${error?.string("code")}")
                 if (error?.string("code") == "context_injection_incomplete") return
                 callbacks.onError(error?.string("message") ?: "GPT-Live error", false)
             }
@@ -386,22 +598,29 @@ private class AndroidGptLiveSession(
 
     private fun finish(reason: String, usageSeconds: Double?) {
         if (!finished.compareAndSet(false, true)) return
+        Log.d(TAG, "Session closed reason=$reason")
         started = false
-        runCatching { events?.unregisterObserver() }
-        runCatching { events?.close() }
-        events = null
-        runCatching { microphoneTrack?.setEnabled(false) }
-        runCatching { microphoneTrack?.dispose() }
-        microphoneTrack = null
-        runCatching { audioSource?.dispose() }
-        audioSource = null
-        runCatching { peer?.close() }
-        runCatching { peer?.dispose() }
-        peer = null
-        runCatching { factory?.dispose() }
-        factory = null
-        runCatching { audioDeviceModule.release() }
-        callbacks.onClosed(reason, usageSeconds)
+        ready.completeExceptionally(IOException("GPT-Live session closed: $reason"))
+        // WebRTC forbids disposing peers on their own Observer callback stack.
+        // This process-owned serial lane also survives ViewModel cancellation.
+        cleanupScope.launch {
+            runCatching { events?.unregisterObserver() }
+            runCatching { events?.close() }
+            runCatching { events?.dispose() }
+            events = null
+            runCatching { microphoneTrack?.setEnabled(false) }
+            runCatching { microphoneTrack?.dispose() }
+            microphoneTrack = null
+            runCatching { audioSource?.dispose() }
+            audioSource = null
+            runCatching { peer?.close() }
+            runCatching { peer?.dispose() }
+            peer = null
+            runCatching { factory?.dispose() }
+            factory = null
+            runCatching { audioDeviceModule?.release() }
+            callbacks.onClosed(reason, usageSeconds)
+        }
     }
 
     private fun nextEventId(prefix: String) = "${prefix}_${eventCounter.incrementAndGet()}"
@@ -413,14 +632,17 @@ private class AndroidGptLiveSession(
         const val CONTEXT_MAX_FRAGMENTS = 80
 
         val webRtcInitialized = AtomicBoolean(false)
+        val cleanupScope = CoroutineScope(Dispatchers.Default.limitedParallelism(1))
 
         fun ensureWebRtcInitialized(context: Context) {
-            if (webRtcInitialized.compareAndSet(false, true)) {
+            synchronized(webRtcInitialized) {
+                if (webRtcInitialized.get()) return
                 PeerConnectionFactory.initialize(
                     PeerConnectionFactory.InitializationOptions.builder(context)
                         .setEnableInternalTracer(false)
                         .createInitializationOptions(),
                 )
+                webRtcInitialized.set(true)
                 Log.i(TAG, "WebRTC initialized for GPT-Live")
             }
         }
@@ -496,6 +718,27 @@ private fun chunkCommentary(text: String): List<String> {
     return out
 }
 
+internal fun chunkSubscriptionText(text: String): List<String> {
+    val clean = text.replace(Regex("\\s+"), " ").trim()
+    if (clean.isBlank()) return emptyList()
+    val out = mutableListOf<String>()
+    val current = StringBuilder()
+    var bytes = 0
+    clean.codePoints().forEach { codePoint ->
+        val character = String(Character.toChars(codePoint))
+        val width = character.toByteArray(StandardCharsets.UTF_8).size
+        if (bytes + width > 500 && current.isNotEmpty()) {
+            out += current.toString()
+            current.clear()
+            bytes = 0
+        }
+        current.append(character)
+        bytes += width
+    }
+    if (current.isNotEmpty()) out += current.toString()
+    return out
+}
+
 private fun JsonObject.string(name: String): String? =
     (this[name] as? JsonPrimitive)?.contentOrNull?.takeIf(String::isNotBlank)
 
@@ -507,3 +750,13 @@ private fun JsonObject.long(name: String): Long? =
 
 private fun JsonObject.double(name: String): Double? =
     (this[name] as? JsonPrimitive)?.doubleOrNull
+
+// The subscription lane sends transcripts/turns without output_audio_buffer.started.
+internal fun gptLiveSpeakingChange(event: JsonObject): Boolean? = when (event.string("type")) {
+    "output_transcript.added", "session.output_transcript.delta",
+    "output_audio_buffer.started", "session.output_audio.started" -> true
+    "input_transcript.added", "session.input_transcript.delta",
+    "output_audio_buffer.stopped", "output_audio_buffer.cleared", "session.output_audio.done" -> false
+    "turn.done" -> if ((event["turn"] as? JsonObject)?.string("role") == "assistant") false else null
+    else -> null
+}

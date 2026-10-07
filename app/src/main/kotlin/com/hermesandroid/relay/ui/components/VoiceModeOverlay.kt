@@ -52,9 +52,11 @@ import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.MicOff
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.Icon
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.IconButton
@@ -211,6 +213,7 @@ fun VoiceModeOverlay(
     val focusMicTap: () -> Unit = {
         dispatchVoiceMicTap(
             uiState = uiState,
+            liveMode = voiceEngineMode == "gpt_live",
             onStartListening = {
                 try {
                     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -252,7 +255,6 @@ fun VoiceModeOverlay(
         onMicRelease()
     }
 
-    var controlsExpanded by remember { mutableStateOf(false) }
     val focusMode = presentationMode == VoicePresentationMode.Focus
     val setFocusMode: (Boolean) -> Unit = { focused ->
         onPresentationModeChange(
@@ -297,8 +299,6 @@ fun VoiceModeOverlay(
         if (focusMode) {
             VoiceSessionPill(
                 uiState = uiState,
-                expanded = controlsExpanded,
-                onExpandedChange = { controlsExpanded = it },
                 focusMode = true,
                 onFocusModeChange = setFocusMode,
                 engineMode = voiceEngineMode,
@@ -307,7 +307,6 @@ fun VoiceModeOverlay(
                 voice = voiceOutputVoice,
                 profileName = voiceProfileName,
                 outputEnabled = voiceOutputEnabled,
-                fallbackEnabled = voiceOutputFallbackEnabled,
                 onModeChange = onModeChange,
                 onMicTap = onMicTap,
                 onMicRelease = onMicRelease,
@@ -414,6 +413,7 @@ fun VoiceModeOverlay(
                     ) {
                         VoiceFocusIdentityPane(
                             uiState = uiState,
+                            liveMode = voiceEngineMode == "gpt_live",
                             backgroundVisualizationEnabled = backgroundVisualizationEnabled,
                             onMicTap = focusMicTap,
                             onMicHoldPress = focusMicHoldPress,
@@ -458,6 +458,7 @@ fun VoiceModeOverlay(
                     ) {
                         VoiceFocusIdentityPane(
                             uiState = uiState,
+                            liveMode = voiceEngineMode == "gpt_live",
                             backgroundVisualizationEnabled = backgroundVisualizationEnabled,
                             onMicTap = focusMicTap,
                             onMicHoldPress = focusMicHoldPress,
@@ -539,6 +540,7 @@ fun VoiceModeOverlay(
         // that visually said "Stop" but was actually wired to "Start."
         VoiceMicButton(
             uiState = uiState,
+            liveMode = voiceEngineMode == "gpt_live",
             onTap = focusMicTap,
             onHoldPress = focusMicHoldPress,
             onHoldRelease = focusMicHoldRelease,
@@ -607,6 +609,7 @@ private fun VoiceErrorDialog(
 @Composable
 private fun VoiceFocusIdentityPane(
     uiState: VoiceUiState,
+    liveMode: Boolean,
     backgroundVisualizationEnabled: Boolean,
     onMicTap: () -> Unit,
     onMicHoldPress: () -> Unit,
@@ -647,6 +650,7 @@ private fun VoiceFocusIdentityPane(
             Spacer(Modifier.height(16.dp))
             VoiceMicButton(
                 uiState = uiState,
+                liveMode = liveMode,
                 onTap = onMicTap,
                 onHoldPress = onMicHoldPress,
                 onHoldRelease = onMicHoldRelease,
@@ -798,6 +802,7 @@ private fun VoiceMicButton(
     onTap: () -> Unit,
     onHoldPress: () -> Unit,
     onHoldRelease: () -> Unit,
+    liveMode: Boolean = false,
     modifier: Modifier = Modifier,
     visible: Boolean = true,
     baseSize: Int = 72,
@@ -805,10 +810,15 @@ private fun VoiceMicButton(
 ) {
     if (!visible) return
 
-    val micActionDescription = when (uiState.state) {
+    val micActionDescription = if (liveMode) {
+        stringResource(if (uiState.gptLiveMuted || uiState.state == VoiceState.Idle || uiState.state == VoiceState.Error) R.string.voice_overlay_gpt_live_resume_action
+            else R.string.voice_overlay_gpt_live_listening_action)
+    } else when (uiState.state) {
         VoiceState.Idle, VoiceState.Error -> stringResource(R.string.voice_overlay_tap_action_idle)
         VoiceState.Listening ->
-            if (uiState.interactionMode == InteractionMode.Continuous) {
+            if (liveMode) {
+                stringResource(R.string.voice_overlay_gpt_live_listening_action)
+            } else if (uiState.interactionMode == InteractionMode.Continuous) {
                 stringResource(R.string.voice_overlay_tap_action_pause)
             } else {
                 stringResource(R.string.voice_overlay_tap_action_listening)
@@ -839,15 +849,17 @@ private fun VoiceMicButton(
     // interrupts TTS; the old tertiary (green-ish) read as "playing" and
     // users didn't realize they could stop the agent.
     val containerColor = when (uiState.state) {
-        VoiceState.Listening -> Color(0xFFE53935)
+        VoiceState.Listening -> if (liveMode) MaterialTheme.colorScheme.primary else Color(0xFFE53935)
         VoiceState.Speaking -> Color(0xFFE53935)
         VoiceState.Transcribing, VoiceState.Thinking -> Color(0xFFE53935)
         VoiceState.Error -> MaterialTheme.colorScheme.errorContainer
         else -> MaterialTheme.colorScheme.primary
     }
 
-    val icon = when (uiState.state) {
-        VoiceState.Listening -> Icons.Filled.Stop
+    val icon = if (liveMode) {
+        if (uiState.gptLiveMuted) Icons.Filled.MicOff else Icons.Filled.Mic
+    } else when (uiState.state) {
+        VoiceState.Listening -> if (liveMode) Icons.Filled.Mic else Icons.Filled.Stop
         VoiceState.Transcribing, VoiceState.Thinking -> Icons.Filled.Stop
         // Stop icon makes the "tap to interrupt TTS" affordance obvious;
         // VolumeUp looked decorative and users didn't try tapping it.
@@ -855,7 +867,9 @@ private fun VoiceMicButton(
         else -> Icons.Filled.Mic
     }
 
-    val gestureModifier = when (uiState.interactionMode) {
+    val gestureModifier = if (liveMode) {
+        Modifier.clickable(onClick = onTap)
+    } else when (uiState.interactionMode) {
         InteractionMode.HoldToTalk -> Modifier.voiceHoldGesture(
             state = uiState.state,
             inactiveActionLabel = micActionDescription,
@@ -879,7 +893,7 @@ private fun VoiceMicButton(
         Box(contentAlignment = Alignment.Center) {
             Icon(
                 imageVector = icon,
-                contentDescription = if (uiState.interactionMode == InteractionMode.HoldToTalk) {
+                contentDescription = if (!liveMode && uiState.interactionMode == InteractionMode.HoldToTalk) {
                     null
                 } else {
                     micActionDescription
@@ -1057,93 +1071,39 @@ fun ConversationVoiceDock(
     systemOverlayAvailable: Boolean = true,
     modifier: Modifier = Modifier,
 ) {
-    var expanded by remember { mutableStateOf(false) }
+    // One quiet row: state, mic, options, close. Everything else is one tap
+    // away in [VoiceOptionsSheet].
+    var optionsOpen by remember { mutableStateOf(false) }
     val engineText = voiceEngineLabel(engineMode)
     val providerText = voiceProviderLabel(provider, model, voice, outputEnabled)
     val profileText = profileName?.takeIf { it.isNotBlank() }
         ?: stringResource(R.string.voice_overlay_default_profile)
+
+    if (optionsOpen) {
+        VoiceOptionsSheet(
+            engineMode = engineMode,
+            interactionMode = uiState.interactionMode,
+            engineText = engineText,
+            profileText = profileText,
+            providerText = providerText,
+            focusMode = false,
+            systemOverlayAvailable = systemOverlayAvailable,
+            onModeChange = onModeChange,
+            onFocusModeChange = { focused -> if (focused) onFocusRequest() },
+            onOverlayRequest = onOverlayRequest,
+            onOpenSettings = {
+                onExit()
+                onOpenSettings()
+            },
+            onDismiss = { optionsOpen = false },
+        )
+    }
 
     Column(
         modifier = modifier
             .fillMaxWidth()
             .testTag("conversationVoiceDock"),
     ) {
-        AnimatedVisibility(visible = expanded) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(start = 10.dp, top = 8.dp, end = 10.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    InteractionMode.values().forEach { mode ->
-                        VoiceControlChip(
-                            text = mode.shortLabel(),
-                            selected = uiState.interactionMode == mode,
-                            onClick = { onModeChange(mode) },
-                            modifier = Modifier.weight(1f),
-                        )
-                    }
-                }
-                VoiceRouteSummary(
-                    engine = engineText,
-                    profile = profileText,
-                    provider = providerText,
-                )
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    if (systemOverlayAvailable) {
-                        TextButton(
-                            onClick = onOverlayRequest,
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(40.dp),
-                        ) {
-                            Text(
-                                text = stringResource(R.string.voice_overlay_overlay),
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                        }
-                    }
-                    TextButton(
-                        onClick = onExit,
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(40.dp),
-                    ) {
-                        Text(
-                            text = stringResource(R.string.voice_overlay_exit),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                    IconButton(
-                        onClick = {
-                            onExit()
-                            onOpenSettings()
-                        },
-                        modifier = Modifier.size(40.dp),
-                    ) {
-                        Icon(
-                            imageVector = Icons.Filled.Settings,
-                            contentDescription = stringResource(R.string.voice_overlay_settings_cd),
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                }
-                HorizontalDivider(
-                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.72f),
-                )
-            }
-        }
-
         AnimatedVisibility(visible = uiState.handoffStatus != null) {
             VoiceHandoffStrip(
                 status = uiState.handoffStatus,
@@ -1160,34 +1120,12 @@ fun ConversationVoiceDock(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Row(
-                modifier = Modifier.weight(1f),
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(start = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                val agentIconPath = LocalAgentIconPath.current
-                Surface(
-                    modifier = Modifier.size(24.dp),
-                    shape = CircleShape,
-                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.58f),
-                ) {
-                    if (!agentIconPath.isNullOrBlank()) {
-                        AsyncImage(
-                            model = File(agentIconPath),
-                            contentDescription = null,
-                            contentScale = ContentScale.Crop,
-                            modifier = Modifier.clip(CircleShape),
-                        )
-                    } else {
-                        Box(contentAlignment = Alignment.Center) {
-                            Icon(
-                                imageVector = Icons.Filled.GraphicEq,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.size(14.dp),
-                            )
-                        }
-                    }
-                }
                 VoiceWaveform(
                     amplitude = uiState.amplitude,
                     state = uiState.state,
@@ -1198,8 +1136,8 @@ fun ConversationVoiceDock(
                 )
                 Text(
                     text = conversationDockStateLabel(uiState.state),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.tertiary,
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
@@ -1207,6 +1145,7 @@ fun ConversationVoiceDock(
 
             ConversationVoiceMicButton(
                 uiState = uiState,
+                liveMode = engineMode == "gpt_live",
                 onMicTap = onMicTap,
                 onMicRelease = onMicRelease,
                 onInterrupt = onInterrupt,
@@ -1221,37 +1160,27 @@ fun ConversationVoiceDock(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.End,
             ) {
-                TextButton(
-                    onClick = onFocusRequest,
+                IconButton(
+                    onClick = { optionsOpen = true },
                     modifier = Modifier
-                        .height(48.dp)
-                        .testTag("conversationVoiceDockFocus"),
+                        .size(48.dp)
+                        .testTag("conversationVoiceDockOptions"),
                 ) {
                     Icon(
-                        imageVector = Icons.Filled.CenterFocusStrong,
-                        contentDescription = null,
-                        modifier = Modifier.size(18.dp),
-                    )
-                    Spacer(Modifier.width(4.dp))
-                    Text(
-                        text = stringResource(R.string.voice_dock_focus),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
+                        imageVector = Icons.Filled.Tune,
+                        contentDescription = stringResource(R.string.voice_options_cd),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
                 IconButton(
-                    onClick = { expanded = !expanded },
+                    onClick = onExit,
                     modifier = Modifier
                         .size(48.dp)
-                        .testTag("conversationVoiceDockExpand"),
+                        .testTag("conversationVoiceDockExit"),
                 ) {
                     Icon(
-                        imageVector = if (expanded) Icons.Filled.ExpandMore else Icons.Filled.ExpandLess,
-                        contentDescription = if (expanded) {
-                            stringResource(R.string.voice_overlay_collapse_cd)
-                        } else {
-                            stringResource(R.string.voice_overlay_expand_cd)
-                        },
+                        imageVector = Icons.Filled.Close,
+                        contentDescription = stringResource(R.string.voice_overlay_exit_cd),
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
@@ -1273,8 +1202,6 @@ private fun conversationDockStateLabel(state: VoiceState): String = when (state)
 @Composable
 private fun VoiceSessionPill(
     uiState: VoiceUiState,
-    expanded: Boolean,
-    onExpandedChange: (Boolean) -> Unit,
     focusMode: Boolean,
     onFocusModeChange: (Boolean) -> Unit,
     engineMode: String?,
@@ -1283,7 +1210,6 @@ private fun VoiceSessionPill(
     voice: String?,
     profileName: String?,
     outputEnabled: Boolean?,
-    fallbackEnabled: Boolean?,
     onModeChange: (InteractionMode) -> Unit,
     onMicTap: () -> Unit,
     onMicRelease: () -> Unit,
@@ -1295,54 +1221,54 @@ private fun VoiceSessionPill(
     onExit: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    var optionsOpen by remember { mutableStateOf(false) }
     val engineText = voiceEngineLabel(engineMode)
     val providerText = voiceProviderLabel(provider, model, voice, outputEnabled)
     val profileText = profileName?.takeIf { it.isNotBlank() } ?: stringResource(R.string.voice_overlay_default_profile)
+
+    if (optionsOpen) {
+        VoiceOptionsSheet(
+            engineMode = engineMode,
+            interactionMode = uiState.interactionMode,
+            engineText = engineText,
+            profileText = profileText,
+            providerText = providerText,
+            focusMode = focusMode,
+            systemOverlayAvailable = systemOverlayAvailable,
+            onModeChange = onModeChange,
+            onFocusModeChange = onFocusModeChange,
+            onOverlayRequest = {
+                onFocusModeChange(false)
+                onOverlayRequest()
+            },
+            // Exit voice mode before navigating so the overlay isn't left
+            // floating over the Voice Settings screen.
+            onOpenSettings = {
+                onExit()
+                onOpenSettings()
+            },
+            onDismiss = { optionsOpen = false },
+        )
+    }
+
     Surface(
         modifier = modifier,
-        shape = appearanceRoundedCornerShape(24.dp),
-        // Fully opaque panel — the overlay floats over live chat/sphere, so a
-        // translucent surface let the background bleed through and made the
-        // dropdown text hard to read.
-        color = MaterialTheme.colorScheme.surface,
-        tonalElevation = 5.dp,
-        shadowElevation = 7.dp,
+        shape = appearanceRoundedCornerShape(28.dp),
+        // Opaque: the pill floats over live chat/sphere.
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
     ) {
-        Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
+        Column(modifier = Modifier.padding(start = 16.dp, top = 6.dp, end = 6.dp, bottom = 6.dp)) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clickable { onExpandedChange(!expanded) },
+                    .clickable { optionsOpen = true },
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                // Show the active profile's local icon (if set) as the leading
-                // glyph — same circular avatar treatment chat uses in
-                // MessageBubble. Falls back to the equalizer icon when there's
-                // no profile icon; the sphere/pet remains the no-icon fallback.
-                val agentIconPath = LocalAgentIconPath.current
-                if (!agentIconPath.isNullOrBlank()) {
-                    AsyncImage(
-                        model = File(agentIconPath),
-                        contentDescription = null,
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier
-                            .testTag("voiceOverlayProfileIcon")
-                            .size(18.dp)
-                            .clip(CircleShape),
-                    )
-                } else {
-                    Icon(
-                        imageVector = Icons.Filled.GraphicEq,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(18.dp),
-                    )
-                }
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = stringResource(R.string.voice_overlay_voice),
-                        style = MaterialTheme.typography.labelLarge,
+                        style = MaterialTheme.typography.titleSmall,
                         color = MaterialTheme.colorScheme.onSurface,
                         maxLines = 1,
                     )
@@ -1357,142 +1283,44 @@ private fun VoiceSessionPill(
                 if (!focusMode) {
                     ConversationVoiceMicButton(
                         uiState = uiState,
+                        liveMode = engineMode == "gpt_live",
                         onMicTap = onMicTap,
                         onMicRelease = onMicRelease,
                         onInterrupt = onInterrupt,
                         onPauseAutoMode = onPauseAutoMode,
                     )
                 }
-                Icon(
-                    imageVector = if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
-                    contentDescription = if (expanded) stringResource(R.string.voice_overlay_collapse_cd) else stringResource(R.string.voice_overlay_expand_cd),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(20.dp),
-                )
+                IconButton(
+                    onClick = { optionsOpen = true },
+                    modifier = Modifier
+                        .size(44.dp)
+                        .testTag("voiceSessionPillOptions"),
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Tune,
+                        contentDescription = stringResource(R.string.voice_options_cd),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
                 IconButton(
                     onClick = onExit,
-                    modifier = Modifier.size(36.dp),
+                    modifier = Modifier.size(44.dp),
                 ) {
                     Icon(
                         imageVector = Icons.Filled.Close,
                         contentDescription = stringResource(R.string.voice_overlay_exit_cd),
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(20.dp),
                     )
                 }
             }
 
             VoiceHandoffStrip(
                 status = uiState.handoffStatus,
-                compact = !expanded,
+                compact = true,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(top = 8.dp),
+                    .padding(top = 4.dp, end = 10.dp),
             )
-
-            AnimatedVisibility(visible = expanded) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 10.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    ) {
-                        InteractionMode.values().forEach { mode ->
-                            VoiceControlChip(
-                                text = mode.shortLabel(),
-                                selected = uiState.interactionMode == mode,
-                                onClick = { onModeChange(mode) },
-                                modifier = Modifier.weight(1f),
-                            )
-                        }
-                    }
-
-                    VoiceRouteSummary(
-                        engine = engineText,
-                        profile = profileText,
-                        provider = providerText,
-                    )
-
-                    HorizontalDivider(
-                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.72f),
-                    )
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp),
-                    ) {
-                        TextButton(
-                            onClick = { onFocusModeChange(!focusMode) },
-                            modifier = Modifier
-                                .weight(1.35f)
-                                .height(40.dp),
-                        ) {
-                            Text(
-                                if (focusMode) {
-                                    stringResource(R.string.voice_overlay_conversation)
-                                } else {
-                                    stringResource(R.string.voice_overlay_focus)
-                                },
-                                style = MaterialTheme.typography.labelMedium,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                        }
-                        if (systemOverlayAvailable) {
-                            TextButton(
-                                onClick = {
-                                    onFocusModeChange(false)
-                                    onOverlayRequest()
-                                },
-                                modifier = Modifier
-                                    .weight(0.95f)
-                                    .height(40.dp),
-                            ) {
-                                Text(
-                                    stringResource(R.string.voice_overlay_overlay),
-                                    style = MaterialTheme.typography.labelMedium,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                            }
-                        }
-                        TextButton(
-                            onClick = onExit,
-                            modifier = Modifier
-                                .weight(0.75f)
-                                .height(40.dp),
-                        ) {
-                            Text(
-                                stringResource(R.string.voice_overlay_exit),
-                                style = MaterialTheme.typography.labelMedium,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                        }
-                        // Settings link (4c): exit voice mode before navigating
-                        // so the overlay isn't left floating over the Voice
-                        // Settings screen.
-                        IconButton(
-                            onClick = {
-                                onExit()
-                                onOpenSettings()
-                            },
-                            modifier = Modifier.size(40.dp),
-                        ) {
-                            Icon(
-                                imageVector = Icons.Filled.Settings,
-                                contentDescription = stringResource(R.string.voice_overlay_settings_cd),
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                    }
-                }
-            }
         }
     }
 }
@@ -1500,6 +1328,7 @@ private fun VoiceSessionPill(
 @Composable
 private fun ConversationVoiceMicButton(
     uiState: VoiceUiState,
+    liveMode: Boolean = false,
     onMicTap: () -> Unit,
     onMicRelease: () -> Unit,
     onInterrupt: () -> Unit,
@@ -1510,9 +1339,11 @@ private fun ConversationVoiceMicButton(
 ) {
     VoiceMicButton(
         uiState = uiState,
+        liveMode = liveMode,
         onTap = {
             dispatchVoiceMicTap(
                 uiState = uiState,
+                liveMode = liveMode,
                 onStartListening = onMicTap,
                 onStopListening = onMicRelease,
                 onInterrupt = onInterrupt,
@@ -1538,11 +1369,20 @@ private fun ConversationVoiceMicButton(
 
 internal fun dispatchVoiceMicTap(
     uiState: VoiceUiState,
+    liveMode: Boolean = false,
     onStartListening: () -> Unit,
     onStopListening: () -> Unit,
     onInterrupt: () -> Unit,
     onPauseAutoMode: () -> Unit,
 ) {
+    if (liveMode) {
+        if (uiState.gptLiveMuted || uiState.state == VoiceState.Idle || uiState.state == VoiceState.Error) {
+            onStartListening()
+        } else {
+            onPauseAutoMode()
+        }
+        return
+    }
     when (uiState.state) {
         VoiceState.Listening -> {
             if (uiState.interactionMode == InteractionMode.Continuous) {
@@ -1583,43 +1423,7 @@ internal fun dispatchVoiceMicHoldPress(
 }
 
 @Composable
-private fun VoiceControlChip(
-    text: String,
-    selected: Boolean,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Surface(
-        modifier = modifier
-            .height(34.dp)
-            .clickable(onClick = onClick),
-        shape = RoundedCornerShape(999.dp),
-        color = if (selected) {
-            MaterialTheme.colorScheme.primaryContainer
-        } else {
-            // Opaque — translucent chips over the floating overlay were hard to read.
-            MaterialTheme.colorScheme.surfaceVariant
-        },
-        contentColor = if (selected) {
-            MaterialTheme.colorScheme.onPrimaryContainer
-        } else {
-            MaterialTheme.colorScheme.onSurfaceVariant
-        },
-    ) {
-        Box(contentAlignment = Alignment.Center) {
-            Text(
-                text = text,
-                style = MaterialTheme.typography.labelSmall,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.padding(horizontal = 8.dp),
-            )
-        }
-    }
-}
-
-@Composable
-private fun VoiceRouteSummary(
+internal fun VoiceRouteSummary(
     engine: String,
     profile: String,
     provider: String,
@@ -1770,18 +1574,12 @@ internal fun voiceRouteDisplayLabel(value: String): String =
 @Composable
 private fun voiceEngineLabel(engineMode: String?): String = when (engineMode) {
     "realtime_agent" -> stringResource(R.string.voice_overlay_engine_realtime)
+    "gpt_live" -> stringResource(R.string.voice_overlay_engine_gpt_live)
     "hermes_voice_output" -> stringResource(R.string.voice_overlay_engine_standard)
     null, "" -> stringResource(R.string.voice_overlay_engine_placeholder)
     else -> engineMode
         .replace('_', ' ')
         .replaceFirstChar { if (it.isLowerCase()) it.titlecase() else it.toString() }
-}
-
-@Composable
-private fun InteractionMode.shortLabel(): String = when (this) {
-    InteractionMode.TapToTalk -> stringResource(R.string.voice_overlay_tap)
-    InteractionMode.HoldToTalk -> stringResource(R.string.voice_overlay_hold)
-    InteractionMode.Continuous -> stringResource(R.string.voice_overlay_auto)
 }
 
 /**

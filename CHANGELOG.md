@@ -8,18 +8,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Added
 
+- GPT-Live can use several ChatGPT subscriptions (`RELAY_GPT_LIVE_CODEX_HOMES`) and moves to the next account when one reaches its usage limit.
 - Android Appearance offers a Clean layout: assistant replies read as open text, message details appear on tap, each turn shows one tool summary, header shortcuts move into the menu, and the status bar appears only when the connection needs attention.
 - Android Clean and Material You themes; Material You follows wallpaper colors on Android 12 and later.
 
 ### Changed
+
+- GPT-Live answers self-contained conversation and quick message drafts directly; actions, saved/private context and current information still go through Hermes. Spoken answers default to one or two brief sentences.
 
 - Android Appearance shows theme, mode, accent, and layout first; language, text, font, animation, background, and pet settings sit under More appearance options.
 - Android uses the Clean layout by default; Classic remains available in Appearance.
 - Android Clean layout: a plain chat background, a header with the agent name and one new-chat action, a borderless pill composer with a filled send button, a chat list led by search, and no status strip in demo mode.
 - Android Appearance puts the layout choice first and previews the selected layout.
 - Android Clean composer is one row (+, message, send or voice); attachments, model, reasoning, and commands open from the + button.
+- Android voice controls are one row (state, mic, options, close); talk mode, voice route, full-screen view, pop-out, and voice settings open from the options button.
 
 ### Fixed
+
+- GPT-Live startup errors read as short messages: a ChatGPT usage limit is reported as such, and proxy error pages are no longer shown in the app.
+
+- GPT-Live replies follow the media speaker/headphone route instead of the call earpiece; subscription response events update Speaking state and captions without duplicating delegated answers.
+
+- GPT-Live subscription voice now has an explicit engine selection, consistent microphone pause/resume, bounded Unicode text, and session cleanup with visible startup errors.
 
 - Android composer placeholder uses readable secondary text; Clean composer options scroll in short windows and at larger text sizes.
 - Android Material container colors stay consistent over nested surfaces, preserving their intended text contrast.

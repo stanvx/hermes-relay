@@ -1436,6 +1436,29 @@ All six deliverables shipped in v0.1.0. Four of the five "non-goals for tonight"
 - **ClawPort** — Web dashboard (parallel effort, different interface surface)
 
 
+### GPT-Live subscription engine
+
+Android stores `gpt_live` as an explicit, connection/profile-scoped voice engine.
+It probes the authenticated Dashboard plugin's `/voice-live/status` and posts
+its SDP offer to `/voice-live/session`, under `/api/plugins/hermes-relay` with
+the selected `profile` query. Missing plugin, login, account ID or provider
+access fails closed; this selection does not fall back to the upstream API-key
+or chained STT/TTS paths. The existing host-selected vanilla GPT-Live path
+retains its upstream compatibility behavior. Provider credentials never reach
+Android. WebRTC owns media, automatic turn detection and interruption; the
+shared mic dispatcher pauses/resumes that microphone independently of saved
+Tap/Hold/Continuous preferences. Close, profile/connection changes and owner
+teardown release the call; callback generations prevent stale session state
+from replacing the current one. Readiness checks credentials only; local tests
+do not certify live provider access or physical microphone behavior.
+
+GPT-Live answers self-contained conversation, general knowledge and message
+wording/drafts directly, with one or two brief sentences by default. Tool use,
+message sends and other actions, saved/private context, current information and
+explicit Hermes tasks remain delegated through the existing chat turn. It never
+claims an action succeeded without a confirmed backend result. This avoids a full
+Hermes turn for casual messaging; required backend work retains its own latency.
+
 ### Voice Overlay capability boundary
 
 Both Android flavors offer an optional voice-only overlay from Voice Focus.

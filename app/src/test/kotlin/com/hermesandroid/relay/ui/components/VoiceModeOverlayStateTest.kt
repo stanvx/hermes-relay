@@ -241,6 +241,24 @@ class VoiceModeOverlayStateTest {
     }
 
     @Test
+    fun liveMicPausesAndResumesRegardlessOfSavedInteractionMode() {
+        InteractionMode.entries.forEach { mode ->
+            val calls = mutableListOf<String>()
+            val listening = VoiceUiState(state = VoiceState.Listening, interactionMode = mode)
+            listOf(listening, listening.copy(state = VoiceState.Speaking, gptLiveMuted = true)).forEach { state ->
+                dispatchVoiceMicTap(
+                    uiState = state, liveMode = true,
+                    onStartListening = { calls += "resume" },
+                    onStopListening = { calls += "stop" },
+                    onInterrupt = { calls += "interrupt" },
+                    onPauseAutoMode = { calls += "pause" },
+                )
+            }
+            assertEquals(listOf("pause", "resume"), calls)
+        }
+    }
+
+    @Test
     fun micTap_interruptsBusyNonContinuousTurns() {
         val calls = mutableListOf<String>()
 

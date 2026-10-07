@@ -753,6 +753,11 @@ def _resolve_codex_oauth_token() -> AuthToken | None:
         if configured_home
         else Path.home() / ".codex" / "auth.json"
     )
+    return read_codex_auth_file(auth_path)
+
+
+def read_codex_auth_file(auth_path: Path) -> AuthToken | None:
+    """Read one Codex CLI ``auth.json`` (read-only; expired tokens are skipped)."""
     try:
         data = json.loads(auth_path.read_text(encoding="utf-8"))
     except Exception:

@@ -69,14 +69,14 @@ class VoiceModeOverlayInteractionTest {
 
         compose.onNodeWithContentDescription("start listening")
             .performTouchInput { click() }
-        compose.onNodeWithContentDescription("Expand voice controls")
+        compose.onNodeWithContentDescription("Exit voice mode")
+            .performTouchInput { click() }
+        // Talk mode lives in the options sheet, not on the pill.
+        compose.onNodeWithText("Hold").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Voice options")
             .performTouchInput { click() }
         compose.mainClock.advanceTimeBy(500)
         compose.onNodeWithText("Hold")
-            .performTouchInput { click() }
-        compose.onNodeWithContentDescription("Collapse voice controls")
-            .performTouchInput { click() }
-        compose.onNodeWithContentDescription("Exit voice mode")
             .performTouchInput { click() }
 
         compose.runOnIdle {
@@ -164,11 +164,12 @@ class VoiceModeOverlayInteractionTest {
             }
         }
 
-        compose.onNodeWithContentDescription("Expand voice controls")
+        compose.onNodeWithContentDescription("Voice options")
             .performTouchInput { click() }
         compose.mainClock.advanceTimeBy(500)
 
-        compose.onNodeWithText("Overlay").assertDoesNotExist()
+        compose.onNodeWithText("Voice settings").assertExists()
+        compose.onNodeWithText("Pop out over other apps").assertDoesNotExist()
     }
 
     @Test

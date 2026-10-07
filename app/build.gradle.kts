@@ -248,6 +248,10 @@ android {
         unitTests.all {
             it.systemProperty("roborazzi.test.record", "true")
             it.maxHeapSize = "2g"
+            // Robolectric 4.17's FileDescriptor interceptor reads
+            // jdk.internal.access on JDK 21; without this every sandbox fails
+            // at setup ("Failed to interact with raw FileDescriptor internals").
+            it.jvmArgs("--add-opens=java.base/jdk.internal.access=ALL-UNNAMED")
         }
 
         // On-demand only. Keep each form factor as an individually selected

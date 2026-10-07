@@ -24,6 +24,47 @@ engine is available for experimental provider-native speech work — it requires
 a paired Relay, is visibly badged as Experimental in Voice Settings, and can be
 switched off without changing the stable voice behavior.
 
+## GPT-Live with a Codex subscription
+
+Select **Settings → Voice → Output → Voice mode → GPT-Live** for continuous
+WebRTC voice. GPT-Live handles ordinary conversation, general questions and
+self-contained message drafts directly, keeping replies brief. Requests to send
+messages, use tools, consult saved/private context or fetch current information
+still go through Hermes in the current Dashboard chat. GPT-Live detects speech turns and spoken
+interruptions automatically; Tap, Hold and Continuous presets do not control
+this engine.
+
+Install the Relay Dashboard plugin on the Hermes host and sign in under
+**Manage** if the Dashboard requests authentication. On that same host, use
+`codex login` or `hermes auth login openai-codex`. Pairing a Relay websocket and
+setting an OpenAI API key are not required for this subscription engine. The
+app selection does not require changing the host's `voice.chat_mode` setting.
+
+The GPT-Live settings card shows server credential readiness, model and voice.
+**Ready** confirms local credentials; starting a session verifies provider
+access and WebRTC connectivity. The defaults are `gpt-live-1-codex` and `cove`.
+Host operators can set `RELAY_GPT_LIVE_SUBSCRIPTION_MODEL` and
+`RELAY_GPT_LIVE_SUBSCRIPTION_VOICE` in the Dashboard process environment, then
+restart the Dashboard.
+
+To spread GPT-Live across several ChatGPT subscriptions, sign each account in
+to its own Codex folder (`CODEX_HOME=/path/to/account-1 codex login`) and list
+the folders, in order of preference, in `RELAY_GPT_LIVE_CODEX_HOMES` (separated
+by `:` on Linux and macOS). When an account reaches its usage limit, Relay
+starts the session with the next account and skips the limited one for 30
+minutes.
+
+Tap the microphone to pause or resume listening. Pausing the microphone does
+not stop a response already playing. Close Voice to end the call and release
+both microphone and playback. Changing the connection or profile ends the live
+session. Startup failures appear in Voice; retry after fixing the reported
+problem. This selection never falls back to a metered API key or chained
+STT/TTS. Select **Hermes Chat + Voice Output** explicitly to use that engine.
+
+OAuth credentials remain on the server. The phone receives the SDP answer and
+then sends WebRTC audio directly to the provider. The subscription transport
+uses a private ChatGPT endpoint and may change independently of this app.
+
 ## What It Is
 
 Voice mode is a layer on top of chat. In the stable engine, your voice is
@@ -181,7 +222,7 @@ Agent provider settings.
 
 ### Global Voice Controls
 
-These controls always show and apply to both engines:
+These controls apply to Hermes Chat + Voice Output and Realtime Agent. GPT-Live uses automatic turn detection and its own microphone pause/resume controls:
 
 - **Interaction mode** — Tap / Hold / Continuous
 - **Silence threshold** — 1-10 seconds, default 3. Only applies in Tap-to-talk mode.

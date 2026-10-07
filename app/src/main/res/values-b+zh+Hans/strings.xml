@@ -2287,6 +2287,8 @@
     <string name="voice_overlay_overlay">浮窗</string>
     <string name="voice_overlay_exit">退出</string>
     <string name="voice_overlay_settings_cd">语音设置</string>
+    <string name="voice_options_cd">语音选项</string>
+    <string name="voice_options_pop_out">在其他应用上方显示</string>
     <string name="voice_overlay_retry">重试</string>
     <string name="voice_overlay_mic_cd">语音麦克风</string>
     <string name="voice_overlay_allow">允许</string>
@@ -4555,4 +4557,11 @@
     <string name="voice_streaming_stopped_basic_next">流式语音已停止。剩余内容将使用基础语音。请检查语音提供商设置。</string>
     <string name="stats_tts_queue_wait">音频队列等待时间</string>
     <string name="stats_tts_player_start">播放器启动延迟</string>
+    <string name="voice_overlay_engine_gpt_live">GPT-Live</string>
+    <string name="voice_overlay_gpt_live_mode">实时 · 自动检测对话轮次</string>
+    <string name="voice_overlay_gpt_live_listening_action">暂停 GPT-Live 麦克风</string>
+    <string name="voice_overlay_gpt_live_resume_action">恢复 GPT-Live 麦克风</string>
+    <string name="voice_settings_gpt_live_desc">使用 Codex 订阅进行连续语音对话。Hermes 处理任务并回答问题。</string>
+    <string name="voice_settings_gpt_live_setup">使用 Relay 控制台插件和服务器上的 Codex 登录。若提示，请在“管理”中登录。不会切换到按量计费的 API。</string>
+    <string name="voice_settings_gpt_live_controls">GPT-Live 会自动检测对话轮次和打断。点击麦克风可暂停或恢复收听；关闭语音模式即可结束会话。</string>
 </resources>

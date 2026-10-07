@@ -2293,6 +2293,8 @@
     <string name="voice_overlay_overlay">Overlay</string>
     <string name="voice_overlay_exit">Beenden</string>
     <string name="voice_overlay_settings_cd">Spracheinstellungen</string>
+    <string name="voice_options_cd">Sprachoptionen</string>
+    <string name="voice_options_pop_out">Über anderen Apps einblenden</string>
     <string name="voice_overlay_retry">Erneut versuchen</string>
     <string name="voice_overlay_mic_cd">Sprachmikrofon</string>
     <string name="voice_overlay_allow">Erlauben</string>
@@ -4631,4 +4633,11 @@
     <string name="voice_streaming_stopped_basic_next">Die Streaming-Sprachausgabe wurde unterbrochen. Der restliche Text nutzt die einfache Sprachausgabe. Prüfe die Einstellungen des Sprachanbieters.</string>
     <string name="stats_tts_queue_wait">Wartezeit auf Audio</string>
     <string name="stats_tts_player_start">Startverzögerung des Players</string>
+    <string name="voice_overlay_engine_gpt_live">GPT-Live</string>
+    <string name="voice_overlay_gpt_live_mode">Live · automatische Erkennung von Gesprächswechseln</string>
+    <string name="voice_overlay_gpt_live_listening_action">GPT-Live-Mikrofon pausieren</string>
+    <string name="voice_overlay_gpt_live_resume_action">GPT-Live-Mikrofon wieder aktivieren</string>
+    <string name="voice_settings_gpt_live_desc">Kontinuierliche Sprachunterhaltung mit deinem Codex-Abonnement. Hermes erledigt Aufgaben und beantwortet Fragen.</string>
+    <string name="voice_settings_gpt_live_setup">Nutzt das Relay-Dashboard-Plugin und eine Codex-Anmeldung auf dem Server. Melde dich bei Bedarf unter „Verwalten“ an. Kein Wechsel zur API mit nutzungsabhängiger Abrechnung.</string>
+    <string name="voice_settings_gpt_live_controls">GPT-Live erkennt Gesprächswechsel und Unterbrechungen automatisch. Tippe auf das Mikrofon, um das Zuhören zu pausieren oder fortzusetzen. Schließe den Sprachmodus, um die Sitzung zu beenden.</string>
 </resources>

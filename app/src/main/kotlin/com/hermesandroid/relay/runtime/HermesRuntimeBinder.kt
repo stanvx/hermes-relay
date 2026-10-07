@@ -563,12 +563,19 @@ internal class HermesRuntimeBinder(
         voice.enterVoiceMode(
             activationId = activationId,
             expectScreenContext = expectScreenContext &&
-                readiness.route != HermesVoiceActivationRoute.Realtime,
+                readiness.route != HermesVoiceActivationRoute.Realtime &&
+                readiness.route != HermesVoiceActivationRoute.GptLive,
         )
         currentCoroutineContext().ensureActive()
         check(isCurrent()) { "Assistant activation was superseded" }
         if (!manualMic) {
             voice.startListening()
+            if (readiness.route == HermesVoiceActivationRoute.GptLive) {
+                kotlinx.coroutines.withTimeout(120_000L) {
+                    voice.uiState.first { it.state == VoiceState.Listening ||
+                        it.state == VoiceState.Error || !it.voiceMode }
+                }
+            }
             check(voice.uiState.value.state == VoiceState.Listening) {
                 voice.uiState.value.error ?: "Voice recorder did not enter Listening"
             }
@@ -672,6 +679,7 @@ enum class HermesVoiceActivationRoute {
     Standard,
     RelayAudio,
     Realtime,
+    GptLive,
 }
 
 internal fun resolveVoiceActivationReadiness(
@@ -687,6 +695,10 @@ internal fun resolveVoiceActivationReadiness(
     }
     val effectiveSettings = voiceSettingsForRelayConfiguration(settings, relayConfigured)
     return when (VoiceEngineMode.fromStorage(effectiveSettings.engineMode)) {
+        VoiceEngineMode.GptLive -> {
+            if (chatReady) HermesVoiceActivationReadiness.Ready(HermesVoiceActivationRoute.GptLive)
+            else HermesVoiceActivationReadiness.Waiting("Waiting for Hermes chat")
+        }
         VoiceEngineMode.RealtimeAgent -> {
             if (relayReady) {
                 HermesVoiceActivationReadiness.Ready(HermesVoiceActivationRoute.Realtime)
