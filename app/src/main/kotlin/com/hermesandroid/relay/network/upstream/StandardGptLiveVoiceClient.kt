@@ -227,13 +227,10 @@ class StandardGptLiveVoiceClient(
                         Log.d("AndroidGptLive", "$operation HTTP ${it.code}")
                         val body = it.body.string()
                         if (it.code == 404 && allow404) return@use null
-                        if (!it.isSuccessful) throw IOException(
-                            when (it.code) {
-                                401, 403 -> "$operation needs dashboard sign-in"
-                                404 -> "$operation is unavailable on this Hermes build"
-                                else -> "$operation failed (HTTP ${it.code}): ${body.take(500)}"
-                            },
-                        )
+                        if (!it.isSuccessful) {
+                            Log.d("AndroidGptLive", "$operation error body: ${body.take(500)}")
+                            throw IOException(gptLiveHttpErrorMessage(operation, it.code, body))
+                        }
                         json.decodeFromString<JsonObject>(body).also { root ->
                             if (root.boolean("ok") == false) {
                                 throw IOException(root.string("detail") ?: root.string("error") ?: "$operation failed")
@@ -256,6 +253,31 @@ class StandardGptLiveVoiceClient(
         val JSON_MEDIA = "application/json".toMediaType()
     }
 }
+
+/**
+ * User-facing message for a failed GPT-Live HTTP call. Proxy error pages
+ * (for example a gateway's JSON or HTML 502 body) stay in the log; only a
+ * short server-provided `detail`/`error` string is shown.
+ */
+internal fun gptLiveHttpErrorMessage(operation: String, code: Int, body: String): String =
+    when (code) {
+        401, 403 -> "$operation needs dashboard sign-in"
+        404 -> "$operation is unavailable on this Hermes build"
+        502, 503, 504 -> "$operation failed: Hermes server unavailable (HTTP $code)"
+        else -> {
+            val detail = runCatching {
+                val root = Json.parseToJsonElement(body) as? JsonObject
+                listOf("detail", "error").firstNotNullOfOrNull { key ->
+                    (root?.get(key) as? JsonPrimitive)
+                        ?.takeIf { primitive -> primitive.isString }
+                        ?.content
+                        ?.trim()
+                        ?.takeIf { text -> text.isNotEmpty() && text.length <= 200 }
+                }
+            }.getOrNull()
+            if (detail != null) "$operation failed (HTTP $code): $detail" else "$operation failed (HTTP $code)"
+        }
+    }
 
 private data class LiveSessionAnswer(
     val sessionId: String?,
