@@ -4,15 +4,18 @@ import android.app.Application
 import androidx.lifecycle.ViewModelStore
 import com.hermesandroid.relay.audio.VoicePlayer
 import com.hermesandroid.relay.audio.VoiceRecorder
+import com.hermesandroid.relay.data.MessageRole
 import com.hermesandroid.relay.data.ChatMessage
 import com.hermesandroid.relay.data.VoicePreferencesRepository
 import com.hermesandroid.relay.data.VoiceSettings
 import com.hermesandroid.relay.data.VoiceEngineMode
 import com.hermesandroid.relay.network.shared.GptLiveCallbacks
 import com.hermesandroid.relay.network.shared.GptLiveHistoryMessage
+import com.hermesandroid.relay.network.shared.GptLiveTranscriptFragment
 import com.hermesandroid.relay.network.shared.GptLiveSession
 import com.hermesandroid.relay.network.shared.GptLiveStatus
 import com.hermesandroid.relay.network.shared.GptLiveVoiceClient
+import com.hermesandroid.relay.viewmodel.VoiceMessageSubmissionResult
 import com.hermesandroid.relay.viewmodel.ChatViewModel
 import com.hermesandroid.relay.viewmodel.VoiceState
 import com.hermesandroid.relay.viewmodel.VoiceViewModel
@@ -26,6 +29,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.setMain
 import org.junit.After
 import org.junit.Assert.*
@@ -43,8 +48,8 @@ class GptLiveSessionTest {
     @Before fun setUp() { Dispatchers.setMain(UnconfinedTestDispatcher()) }
     @After fun tearDown() { store.clear(); Dispatchers.resetMain() }
 
-    private fun coordinator(client: GptLiveVoiceClient, preferences: VoicePreferencesRepository? = null): VoiceViewModel {
-        val chat = mockk<ChatViewModel>(relaxed = true) {
+    private fun coordinator(client: GptLiveVoiceClient, preferences: VoicePreferencesRepository? = null, chatOverride: ChatViewModel? = null): VoiceViewModel {
+        val chat = chatOverride ?: mockk<ChatViewModel>(relaxed = true) {
             every { messages } returns MutableStateFlow(emptyList<ChatMessage>())
         }
         val player = mockk<VoicePlayer>(relaxed = true) {
@@ -92,6 +97,40 @@ class GptLiveSessionTest {
         assertFalse(voice.uiState.value.outputAudioActive)
         verify { client.session.close() }
         verify(exactly = 0) { recorder.startRecording() }
+    }
+
+    @Test fun delegatedAnswerAppearsOnceAsProviderCaptionAndResetsForNextTurn() = runTest {
+        for (streamingFirst in listOf(false, true)) {
+            val streaming = MutableStateFlow(streamingFirst)
+            val messages = MutableStateFlow(emptyList<ChatMessage>())
+            val chat = mockk<ChatViewModel>(relaxed = true) {
+                every { this@mockk.messages } returns messages
+                every { isStreaming } returns streaming
+                every { sendGptLiveDelegation(any(), any(), any(), any()) } answers {
+                    messages.value = listOf(ChatMessage(id = "answer", role = MessageRole.ASSISTANT, content = "Hello. there", timestamp = 0L))
+                    VoiceMessageSubmissionResult.Submitted("user")
+                }
+            }
+            val client = FakeLiveClient()
+            val voice = coordinator(client, chatOverride = chat)
+            voice.enterVoiceMode()
+            val callbacks = client.callbacks!!
+            callbacks.onDelegation("delegation", "Say hello", emptyList())
+            verify { client.session.speak("delegation", if (streamingFirst) "Hello." else "Hello. there") }
+            callbacks.onSpeakingChanged(true)
+            callbacks.onTranscript(GptLiveTranscriptFragment(GptLiveTranscriptFragment.Speaker.Assistant, "Hello. ", 0L, 1L))
+            streaming.value = false
+            advanceTimeBy(201)
+            runCurrent()
+            callbacks.onSpeakingChanged(true)
+            callbacks.onTranscript(GptLiveTranscriptFragment(GptLiveTranscriptFragment.Speaker.Assistant, "there", 1L, 2L))
+            assertEquals("Hello. there", voice.uiState.value.responseText)
+            assertEquals(VoiceState.Speaking, voice.uiState.value.state)
+            callbacks.onSpeakingChanged(false)
+            callbacks.onSpeakingChanged(true)
+            callbacks.onTranscript(GptLiveTranscriptFragment(GptLiveTranscriptFragment.Speaker.Assistant, "Next answer", 2L, 3L))
+            assertEquals("Next answer", voice.uiState.value.responseText)
+        }
     }
 
     @Test fun missingSubscriptionFailsClosedWithVisibleError() = runTest {

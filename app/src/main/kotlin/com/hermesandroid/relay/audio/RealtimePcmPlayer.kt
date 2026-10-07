@@ -31,10 +31,7 @@ class RealtimePcmPlayer(private val context: Context? = null) {
     private val writeLock = Any()
     private val audioManager =
         context?.applicationContext?.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
-    private val realtimeAudioAttributes = AudioAttributes.Builder()
-        .setUsage(AudioAttributes.USAGE_MEDIA)
-        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-        .build()
+    private val realtimeAudioAttributes = voicePlaybackAudioAttributes()
     private val audioFocusChangeListener = AudioManager.OnAudioFocusChangeListener { change ->
         Log.i(TAG, "Realtime PCM audio focus change=$change")
     }
@@ -829,3 +826,9 @@ internal object RealtimePcmBufferPolicy {
     fun startupPrerollBytes(sampleRate: Int): Int =
         bytesForDurationMs(sampleRate, STARTUP_PREROLL_MS)
 }
+
+/** Voice replies follow the user's media route, including speaker and headphones. */
+internal fun voicePlaybackAudioAttributes(): AudioAttributes = AudioAttributes.Builder()
+    .setUsage(AudioAttributes.USAGE_MEDIA)
+    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+    .build()

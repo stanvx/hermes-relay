@@ -21,6 +21,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- GPT-Live replies follow the media speaker/headphone route instead of the call earpiece; subscription response events update Speaking state and captions without duplicating delegated answers.
+
 - GPT-Live subscription voice now has an explicit engine selection, consistent microphone pause/resume, bounded Unicode text, and session cleanup with visible startup errors.
 
 - Android composer placeholder uses readable secondary text; Clean composer options scroll in short windows and at larger text sizes.

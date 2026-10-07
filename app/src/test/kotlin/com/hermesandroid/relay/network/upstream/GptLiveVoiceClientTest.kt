@@ -3,6 +3,8 @@ package com.hermesandroid.relay.network.upstream
 import android.content.Context
 import io.mockk.mockk
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
 import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
@@ -12,6 +14,14 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class GptLiveVoiceClientTest {
+    @Test fun subscriptionResponseChangesSpeakingUntilAssistantTurnEnds() {
+        fun event(raw: String) = gptLiveSpeakingChange(Json.decodeFromString<JsonObject>(raw))
+        assertEquals(true, event("""{"type":"output_transcript.added"}"""))
+        assertEquals(false, event("""{"type":"turn.done","turn":{"role":"assistant"}}"""))
+        assertEquals(null, event("""{"type":"turn.done","turn":{"role":"user"}}"""))
+        assertEquals(false, event("""{"type":"input_transcript.added"}"""))
+    }
+
     @Test
     fun subscriptionSelectionDoesNotRequireHostVoiceModeOrApiKey() = runTest {
         val server = MockWebServer()

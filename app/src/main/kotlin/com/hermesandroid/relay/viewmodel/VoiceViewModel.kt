@@ -1816,6 +1816,10 @@ class VoiceViewModel(application: Application) : AndroidViewModel(application) {
                                             transcribedText = appendLiveCaption(state.transcribedText, fragment.text),
                                         )
                                     }
+                                } else {
+                                    _uiState.update { state -> state.copy(
+                                        responseText = appendLiveCaption(state.responseText, fragment.text),
+                                    ) }
                                 }
                             }
                         },
@@ -1826,6 +1830,7 @@ class VoiceViewModel(application: Application) : AndroidViewModel(application) {
                                     state = if (speaking) VoiceState.Speaking
                                         else if (state.gptLiveMuted) VoiceState.Idle else VoiceState.Listening,
                                     outputAudioActive = speaking,
+                                    responseText = if (speaking && !state.outputAudioActive) "" else state.responseText,
                                 ) }
                             }
                         },
@@ -1931,10 +1936,13 @@ class VoiceViewModel(application: Application) : AndroidViewModel(application) {
                         session.speak(delegationId, clean.substring(spokenChars))
                         spokenChars = clean.length
                     }
-                    _uiState.update { it.copy(responseText = clean) }
                 }
                 if (assistantId != null && !chat.isStreaming.value) {
-                    _uiState.update { it.copy(state = VoiceState.Listening, outputAudioActive = false) }
+                    _uiState.update { state ->
+                        if (state.outputAudioActive) state else state.copy(
+                            state = if (state.gptLiveMuted) VoiceState.Idle else VoiceState.Listening,
+                        )
+                    }
                     return@launch
                 }
                 delay(200L)

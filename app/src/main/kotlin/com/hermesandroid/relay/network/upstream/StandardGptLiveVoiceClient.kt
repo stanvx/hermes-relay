@@ -2,6 +2,7 @@ package com.hermesandroid.relay.network.upstream
 
 import android.content.Context
 import android.util.Log
+import com.hermesandroid.relay.audio.voicePlaybackAudioAttributes
 import com.hermesandroid.relay.network.shared.GptLiveCallbacks
 import com.hermesandroid.relay.network.shared.GptLiveHistoryMessage
 import com.hermesandroid.relay.network.shared.GptLiveSession
@@ -292,7 +293,9 @@ private class AndroidGptLiveSession(
 
     suspend fun start() {
         ensureWebRtcInitialized(appContext)
-        audioDeviceModule = JavaAudioDeviceModule.builder(appContext).createAudioDeviceModule()
+        audioDeviceModule = JavaAudioDeviceModule.builder(appContext)
+            .setAudioAttributes(voicePlaybackAudioAttributes())
+            .createAudioDeviceModule()
         val localFactory = PeerConnectionFactory.builder()
             .setAudioDeviceModule(audioDeviceModule)
             .createPeerConnectionFactory()
@@ -480,6 +483,7 @@ private class AndroidGptLiveSession(
     private fun handleEvent(raw: String) {
         val event = runCatching { json.decodeFromString<JsonObject>(raw) }.getOrNull() ?: return
         Log.d(TAG, "Received event=${event.string("type")}")
+        gptLiveSpeakingChange(event)?.let(callbacks.onSpeakingChanged)
         when (event.string("type")) {
             "session.started" -> {
                 started = true
@@ -526,9 +530,6 @@ private class AndroidGptLiveSession(
             // Treating it as another transcript fragment duplicates spoken
             // text and can corrupt a delegated prompt, so it is bookkeeping only.
             "turn.done" -> Unit
-            "output_audio_buffer.started", "session.output_audio.started" -> callbacks.onSpeakingChanged(true)
-            "output_audio_buffer.stopped", "output_audio_buffer.cleared", "session.output_audio.done" ->
-                callbacks.onSpeakingChanged(false)
             "session.delegation.created" -> {
                 val id = (event["delegation"] as? JsonObject)?.string("id") ?: return
                 callbacks.onDelegation(id, null, contextWindow())
@@ -724,3 +725,13 @@ private fun JsonObject.long(name: String): Long? =
 
 private fun JsonObject.double(name: String): Double? =
     (this[name] as? JsonPrimitive)?.doubleOrNull
+
+// The subscription lane sends transcripts/turns without output_audio_buffer.started.
+internal fun gptLiveSpeakingChange(event: JsonObject): Boolean? = when (event.string("type")) {
+    "output_transcript.added", "session.output_transcript.delta",
+    "output_audio_buffer.started", "session.output_audio.started" -> true
+    "input_transcript.added", "session.input_transcript.delta",
+    "output_audio_buffer.stopped", "output_audio_buffer.cleared", "session.output_audio.done" -> false
+    "turn.done" -> if ((event["turn"] as? JsonObject)?.string("role") == "assistant") false else null
+    else -> null
+}
