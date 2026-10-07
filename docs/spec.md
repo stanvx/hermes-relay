@@ -1452,6 +1452,13 @@ teardown release the call; callback generations prevent stale session state
 from replacing the current one. Readiness checks credentials only; local tests
 do not certify live provider access or physical microphone behavior.
 
+GPT-Live answers self-contained conversation, general knowledge and message
+wording/drafts directly, with one or two brief sentences by default. Tool use,
+message sends and other actions, saved/private context, current information and
+explicit Hermes tasks remain delegated through the existing chat turn. It never
+claims an action succeeded without a confirmed backend result. This avoids a full
+Hermes turn for casual messaging; required backend work retains its own latency.
+
 ### Voice Overlay capability boundary
 
 Both Android flavors offer an optional voice-only overlay from Voice Focus.

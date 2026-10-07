@@ -13,6 +13,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Changed
 
+- GPT-Live answers self-contained conversation and quick message drafts directly; actions, saved/private context and current information still go through Hermes. Spoken answers default to one or two brief sentences.
+
 - Android Appearance shows theme, mode, accent, and layout first; language, text, font, animation, background, and pet settings sit under More appearance options.
 - Android uses the Clean layout by default; Classic remains available in Appearance.
 - Android Clean layout: a plain chat background, a header with the agent name and one new-chat action, a borderless pill composer with a filled send button, a chat list led by search, and no status strip in demo mode.

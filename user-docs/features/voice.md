@@ -27,8 +27,10 @@ switched off without changing the stable voice behavior.
 ## GPT-Live with a Codex subscription
 
 Select **Settings → Voice → Output → Voice mode → GPT-Live** for continuous
-WebRTC voice. Hermes still handles delegated questions, tools, memory and tasks
-through the current Dashboard chat. GPT-Live detects speech turns and spoken
+WebRTC voice. GPT-Live handles ordinary conversation, general questions and
+self-contained message drafts directly, keeping replies brief. Requests to send
+messages, use tools, consult saved/private context or fetch current information
+still go through Hermes in the current Dashboard chat. GPT-Live detects speech turns and spoken
 interruptions automatically; Tap, Hold and Continuous presets do not control
 this engine.
 
