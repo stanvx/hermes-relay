@@ -576,6 +576,11 @@ data class VoiceStats(
     val interactionMode: String = "tap",
     /** Current voice engine ("hermes_voice_output" / "realtime_agent"). */
     val voiceEngineMode: String = VoiceEngineMode.HermesVoiceOutput.storageValue,
+    /** True while a full-duplex GPT-Live WebRTC session owns mic + speaker. */
+    val gptLiveActive: Boolean = false,
+    /** Effective provider model/voice for the live session, for honest UI labels. */
+    val gptLiveModel: String = "",
+    val gptLiveVoice: String = "",
     /** Per-profile Realtime Agent selections; blank means relay default. */
     val realtimeModel: String = "",
     val realtimeVoice: String = "",
@@ -1567,7 +1572,9 @@ class VoiceViewModel(application: Application) : AndroidViewModel(application) {
      */
     private fun applyVoiceSettingsSnapshot(settings: com.hermesandroid.relay.data.VoiceSettings) {
         val nextEngineMode = VoiceEngineMode.fromStorage(settings.engineMode)
-        if (voiceEngineMode != nextEngineMode) {
+        val previousEngineMode = voiceEngineMode
+        val engineModeChanged = previousEngineMode != nextEngineMode
+        if (engineModeChanged) {
             voiceOutputEpoch++
             if (inboundSpeechPlaying) interruptSpeaking(cancelActiveTurn = false)
             else retireInboundSpeech()
@@ -1576,7 +1583,7 @@ class VoiceViewModel(application: Application) : AndroidViewModel(application) {
         val realtimeSelectionChanged =
             realtimeModel != settings.realtimeModel || realtimeVoice != settings.realtimeVoice
         if (
-            voiceEngineMode != nextEngineMode ||
+            engineModeChanged ||
             finalAnswerPolicyChanged ||
             realtimeTraceDetails != settings.realtimeTraceDetails ||
             realtimeSelectionChanged
@@ -1594,7 +1601,7 @@ class VoiceViewModel(application: Application) : AndroidViewModel(application) {
         // Switching engine away from Realtime Agent (or disabling the
         // persistent toggle) must drop any open persistent session.
         if (
-            (voiceEngineMode == VoiceEngineMode.RealtimeAgent &&
+            (previousEngineMode == VoiceEngineMode.RealtimeAgent &&
                 nextEngineMode != VoiceEngineMode.RealtimeAgent) ||
             (realtimePersistentSession && !settings.realtimePersistentSession) ||
             finalAnswerPolicyChanged ||
@@ -1606,6 +1613,36 @@ class VoiceViewModel(application: Application) : AndroidViewModel(application) {
             VoiceEngineMode.HermesVoiceOutput
         } else {
             nextEngineMode
+        }
+
+        // Engine changes can happen while the full-screen Voice UI is already
+        // open (Voice settings is presented from that UI). Previously the
+        // preference changed from Realtime Agent -> Hermes here, but GPT-Live
+        // was only started from enterVoiceMode(). The old recorder therefore
+        // kept owning the microphone until the user pressed Stop, which made
+        // the UI look like Standard chained STT/TTS even though the host was
+        // configured for gpt-live.
+        //
+        // Make the transition itself an ownership boundary: release any
+        // recorder capture, tear down an obsolete GPT-Live session when
+        // leaving Hermes, and immediately re-evaluate the host GPT-Live mode
+        // when entering Hermes while Voice is already visible.
+        if (engineModeChanged && _uiState.value.voiceMode) {
+            when (voiceEngineMode) {
+                VoiceEngineMode.HermesVoiceOutput -> {
+                    cancelPendingListeningStart()
+                    if (_uiState.value.state == VoiceState.Listening || recorder?.isRecording() == true) {
+                        cancelListeningWithoutProcessing(
+                            title = "Voice engine changed",
+                            detail = "Released Standard recorder before starting Hermes GPT-Live",
+                        )
+                    }
+                    startGptLiveIfSelected()
+                }
+                VoiceEngineMode.RealtimeAgent -> {
+                    closeGptLiveSession()
+                }
+            }
         }
         voiceStopPhrases = settings.stopPhrases
         finalAnswerOnly = settings.finalAnswerOnly
@@ -1752,8 +1789,10 @@ class VoiceViewModel(application: Application) : AndroidViewModel(application) {
                 val session = client.startSession(
                     history = history,
                     callbacks = GptLiveCallbacks(
-                        onDelegation = { delegationId, context ->
-                            viewModelScope.launch { handleGptLiveDelegation(delegationId, context) }
+                        onDelegation = { delegationId, prompt, context ->
+                            viewModelScope.launch {
+                                handleGptLiveDelegation(delegationId, prompt, context)
+                            }
                         },
                         onTranscript = { fragment ->
                             if (fragment.speaker == GptLiveTranscriptFragment.Speaker.User) {
@@ -1781,6 +1820,13 @@ class VoiceViewModel(application: Application) : AndroidViewModel(application) {
                         onClosed = { reason, usageSeconds ->
                             Log.i(TAG, "GPT-Live closed reason=$reason usageSeconds=$usageSeconds")
                             gptLiveSession = null
+                            _voiceStats.update {
+                                it.copy(
+                                    gptLiveActive = false,
+                                    gptLiveModel = "",
+                                    gptLiveVoice = "",
+                                )
+                            }
                             if (_uiState.value.voiceMode && reason != "close_requested") {
                                 _uiState.update { it.copy(state = VoiceState.Idle, outputAudioActive = false) }
                             }
@@ -1801,6 +1847,13 @@ class VoiceViewModel(application: Application) : AndroidViewModel(application) {
                     return@launch
                 }
                 gptLiveSession = session
+                _voiceStats.update {
+                    it.copy(
+                        gptLiveActive = true,
+                        gptLiveModel = status.model,
+                        gptLiveVoice = status.voice,
+                    )
+                }
                 _uiState.update {
                     it.copy(state = VoiceState.Listening, outputAudioActive = false, error = null)
                 }
@@ -1813,6 +1866,7 @@ class VoiceViewModel(application: Application) : AndroidViewModel(application) {
 
     private suspend fun handleGptLiveDelegation(
         delegationId: String,
+        delegatedPrompt: String?,
         context: List<GptLiveTranscriptFragment>,
     ) {
         val session = gptLiveSession ?: return
@@ -1823,9 +1877,13 @@ class VoiceViewModel(application: Application) : AndroidViewModel(application) {
             if (last?.first == fragment.speaker) last.second.append(fragment.text)
             else turns += fragment.speaker to StringBuilder(fragment.text)
         }
-        val prompt = turns.asReversed()
-            .firstOrNull { it.first == GptLiveTranscriptFragment.Speaker.User }
-            ?.second?.toString()?.replace(Regex("\\s+"), " ")?.trim().orEmpty()
+        val prompt = delegatedPrompt
+            ?.replace(Regex("\\s+"), " ")
+            ?.trim()
+            ?.takeIf { it.isNotBlank() }
+            ?: turns.asReversed()
+                .firstOrNull { it.first == GptLiveTranscriptFragment.Speaker.User }
+                ?.second?.toString()?.replace(Regex("\\s+"), " ")?.trim().orEmpty()
         val voiceContext = turns.joinToString("\n") { (speaker, text) ->
             "${if (speaker == GptLiveTranscriptFragment.Speaker.User) "User" else "Voice assistant"}: ${text.toString().replace(Regex("\\s+"), " ").trim()}"
         }
@@ -1896,6 +1954,13 @@ class VoiceViewModel(application: Application) : AndroidViewModel(application) {
         gptLiveStarting = false
         runCatching { gptLiveSession?.close() }
         gptLiveSession = null
+        _voiceStats.update {
+            it.copy(
+                gptLiveActive = false,
+                gptLiveModel = "",
+                gptLiveVoice = "",
+            )
+        }
     }
 
     /**
