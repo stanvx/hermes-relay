@@ -2,8 +2,16 @@ package com.hermesandroid.relay.ui.screens
 
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.onFirst
+import androidx.compose.ui.test.onLast
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertIsDisplayed
 import com.hermesandroid.relay.data.BotGroupMessage
 import com.hermesandroid.relay.data.BotGatewayRoute
 import com.hermesandroid.relay.data.BotGatewayRouteKey
@@ -32,17 +40,78 @@ class BotModeScreenTest {
     val compose = createComposeRule()
 
     @Test
-    fun `tabs filter bots and read only groups without changing workspace`() {
+    fun `settings avatar and main chat stay reachable with no gateways`() {
+        var settingsOpened = 0
+        var chatOpened = 0
+        compose.setContent {
+            HermesRelayTheme(appThemeId = "hermes-relay", themePreference = "dark") {
+                BotModeContent(
+                    state = BotModeState(),
+                    connections = emptyList(),
+                    activeConnection = null,
+                    onOpenSettings = { settingsOpened++ },
+                    onOpenChat = { chatOpened++ },
+                    onRefresh = {},
+                    onSelectGateway = {},
+                    onOpenBot = {},
+                    onOpenGroup = {},
+                    onNewBot = {},
+                )
+            }
+        }
+        compose.onNodeWithContentDescription("Settings").performClick()
+        compose.onNodeWithText("Main chat").assertDoesNotExist()
+        compose.onNodeWithContentDescription("New chat").performClick()
+        compose.onNodeWithText("Create Bot").assertIsNotEnabled()
+        compose.onNodeWithText("Main chat").performClick()
+        compose.onNodeWithContentDescription("Back").assertDoesNotExist()
+        compose.onNodeWithContentDescription("All gateways").assertDoesNotExist()
+        compose.runOnIdle {
+            assertEquals(1, settingsOpened)
+            assertEquals(1, chatOpened)
+        }
+    }
+
+    @Test
+    fun `home lists pinned bots, conversations and read only groups together`() {
         render()
 
-        compose.onNodeWithText("Lucy").assertExists()
-        compose.onNodeWithText("Launch Council").assertExists()
-
-        compose.onNodeWithText("Groups").performClick()
-
-        compose.onNodeWithText("Lucy").assertDoesNotExist()
+        // Pinned shortcut plus conversation row.
+        compose.onAllNodesWithText("Lucy").assertCountEquals(2)
         compose.onNodeWithText("Launch Council").assertExists()
         compose.onNodeWithText("Read only").assertExists()
+    }
+
+    @Test
+    fun `plus opens the To picker which searches and opens bots`() {
+        val opened = mutableListOf<String>()
+        var created = 0
+        compose.setContent {
+            HermesRelayTheme(appThemeId = "hermes-relay", themePreference = "dark") {
+                BotModeContent(
+                    state = state(),
+                    connections = listOf(connection(), labConnection()),
+                    activeConnection = connection(),
+                    onOpenSettings = {},
+                    onOpenChat = {},
+                    onRefresh = {},
+                    onSelectGateway = {},
+                    onOpenBot = { opened += it.route!!.connectionId },
+                    onOpenGroup = {},
+                    onNewBot = { created++ },
+                    nowMs = NOW + 200_000L,
+                )
+            }
+        }
+
+        compose.onNodeWithContentDescription("New chat").performClick()
+        compose.onNodeWithText("Create Bot").assertExists()
+        compose.onAllNodesWithText("Researcher").onLast().performClick()
+        assertEquals(listOf("lab"), opened)
+
+        compose.onNodeWithContentDescription("New chat").performClick()
+        compose.onNodeWithText("Create Bot").performClick()
+        assertEquals(1, created)
     }
 
     @Test
@@ -54,7 +123,7 @@ class BotModeScreenTest {
             onOpenGroup = { groupOwner = it.key },
         )
 
-        compose.onNodeWithText("Lucy").performClick()
+        compose.onAllNodesWithText("Lucy").onLast().performClick()
         compose.onNodeWithText("Launch Council").performClick()
 
         assertEquals("default", botOwner)
@@ -65,7 +134,7 @@ class BotModeScreenTest {
     fun `gateway scope filters union without switching active connection`() {
         render(selectedGatewayId = "lab")
 
-        compose.onNodeWithText("Researcher").assertExists()
+        compose.onAllNodesWithText("Researcher").onFirst().assertExists()
         compose.onNodeWithText("Lucy").assertDoesNotExist()
     }
 
@@ -74,8 +143,8 @@ class BotModeScreenTest {
         val opened = mutableListOf<String>()
         render(onOpenBot = { opened += it.route!!.connectionId })
 
-        compose.onNodeWithText("Lucy").performClick()
-        compose.onNodeWithText("Researcher").performClick()
+        compose.onAllNodesWithText("Lucy").onLast().performClick()
+        compose.onAllNodesWithText("Researcher").onLast().performClick()
 
         assertEquals(listOf("home", "lab"), opened)
     }
@@ -121,6 +190,49 @@ class BotModeScreenTest {
         assertNotEquals(bot.lazyItemKey, bot.copy(route = null).lazyItemKey)
     }
 
+
+    @Test
+    fun `picker request is consumed and searching a gateway keeps exact bot ownership`() {
+        val opened = mutableListOf<String>()
+        var consumed = 0
+        compose.setContent {
+            HermesRelayTheme(appThemeId = "hermes-relay", themePreference = "dark") {
+                BotModeContent(
+                    openPicker = true,
+                    onPickerHandled = { consumed++ },
+                    state = state(),
+                    connections = listOf(connection(), labConnection()),
+                    activeConnection = connection(),
+                    onOpenSettings = {}, onOpenChat = {}, onRefresh = {}, onSelectGateway = {},
+                    onOpenBot = { opened += it.route!!.connectionId }, onOpenGroup = {}, onNewBot = {},
+                    nowMs = NOW,
+                )
+            }
+        }
+        compose.onNodeWithText("Search Bots").performTextInput("Lab server")
+        compose.onAllNodesWithText("Researcher").onLast().assertIsDisplayed().performClick()
+        compose.runOnIdle {
+            assertEquals(1, consumed)
+            assertEquals(listOf("lab"), opened)
+        }
+    }
+
+    @Test
+    fun `search with no matches offers creation and a clear empty result`() {
+        render()
+        compose.onNodeWithContentDescription("New chat").performClick()
+        compose.onNodeWithText("Search Bots").performTextInput("not-a-bot")
+        compose.onNodeWithText("No results").assertIsDisplayed()
+        compose.onNodeWithText("Create Bot").assertIsEnabled()
+    }
+
+    @Test
+    fun `opening one bot disables other bot rows until routing settles`() {
+        render(openingRoute = BotGatewayRouteKey("home", "default"))
+        compose.onAllNodesWithText("Researcher").onLast().assertIsNotEnabled()
+        compose.onNodeWithText("Opening Bot Chat…").assertExists()
+    }
+
     private fun render(
         onOpenBot: (BotRosterEntry) -> Unit = {},
         onOpenGroup: (BotGroupRoom) -> Unit = {},
@@ -136,7 +248,8 @@ class BotModeScreenTest {
                     activeConnection = connection(),
                     selectedGatewayId = selectedGatewayId,
                     openingRoute = openingRoute,
-                    onBack = {},
+                    onOpenSettings = {},
+                    onOpenChat = {},
                     onRefresh = {},
                     onSelectGateway = {},
                     onOpenBot = onOpenBot,

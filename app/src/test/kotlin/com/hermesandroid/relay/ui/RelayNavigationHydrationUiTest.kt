@@ -29,6 +29,49 @@ class RelayNavigationHydrationUiTest {
     val compose = createComposeRule()
 
     @Test
+    fun `New returns to the existing Bots home and requests its picker without opening Main chat`() {
+        lateinit var controller: NavHostController
+        compose.setContent {
+            controller = rememberNavController()
+            NavHost(navController = controller, startDestination = Screen.BotMode.route) {
+                composable(Screen.BotMode.route) { Text("Bots home") }
+                composable("bot-test") { Text("Bot chat") }
+                composable(Screen.Chat.route) { Text("Main chat") }
+            }
+        }
+        compose.runOnIdle { controller.navigate("bot-test") }
+        compose.onNodeWithText("Bot chat").assertExists()
+        compose.runOnIdle { controller.returnToBots(openPicker = true) }
+        compose.onNodeWithText("Bots home").assertExists()
+        compose.onNodeWithText("Main chat").assertDoesNotExist()
+        compose.runOnIdle {
+            org.junit.Assert.assertEquals(true,
+                controller.currentBackStackEntry?.savedStateHandle?.get<Boolean>("openBotPicker"))
+            org.junit.Assert.assertNull(controller.previousBackStackEntry)
+        }
+    }
+
+    @Test
+    fun `main chat back returns to existing Bots and deep linked chat creates Bots home`() {
+        lateinit var controller: NavHostController
+        compose.setContent {
+            controller = rememberNavController()
+            NavHost(navController = controller, startDestination = Screen.Chat.route) {
+                composable(Screen.BotMode.route) { Text("Bots home") }
+                composable(Screen.Chat.route) { Text("Main chat") }
+            }
+        }
+        compose.onNodeWithText("Main chat").assertExists()
+        compose.runOnIdle { controller.returnToBots() }
+        compose.onNodeWithText("Bots home").assertExists()
+        compose.runOnIdle { controller.navigate(Screen.Chat.route()) }
+        compose.onNodeWithText("Main chat").assertExists()
+        compose.runOnIdle { controller.returnToBots() }
+        compose.onNodeWithText("Bots home").assertExists()
+        compose.runOnIdle { org.junit.Assert.assertNull(controller.previousBackStackEntry) }
+    }
+
+    @Test
     fun `connection policy hydration keeps navigation owner and destination mounted`() {
         var navigationHydrated by mutableStateOf(true)
         val observedControllers = mutableListOf<NavHostController>()

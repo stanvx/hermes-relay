@@ -1,5 +1,18 @@
 package com.hermesandroid.relay.ui.screens
 
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.vector.ImageVector
 import android.text.format.DateUtils
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
@@ -11,18 +24,17 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.AccountCircle
+import androidx.compose.material.icons.filled.ChatBubble
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ExpandMore
@@ -31,10 +43,12 @@ import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.customActions
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -59,16 +73,16 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import coil3.compose.AsyncImage
+import coil3.compose.SubcomposeAsyncImage
 import com.hermesandroid.relay.R
 import com.hermesandroid.relay.data.BotGroupMessage
 import com.hermesandroid.relay.data.BotGroupRoom
@@ -80,10 +94,11 @@ import com.hermesandroid.relay.data.Connection
 import com.hermesandroid.relay.ui.theme.RelayRefresh
 import com.hermesandroid.relay.viewmodel.ConnectionViewModel
 import java.io.File
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-
-internal enum class BotModeFilter { All, Bots, Groups }
 
 /** Bundle-compatible key; length-prefix the connection so delimiters cannot alias owners. */
 internal val BotRosterEntry.lazyItemKey: String
@@ -107,7 +122,10 @@ private sealed interface BotModeRow {
 @Composable
 fun BotModeScreen(
     connectionViewModel: ConnectionViewModel,
-    onBack: () -> Unit,
+    openPicker: Boolean = false,
+    onPickerHandled: () -> Unit = {},
+    onOpenSettings: () -> Unit,
+    onOpenChat: () -> Unit,
     onOpenBotChat: (route: BotGatewayRoute, sessionId: String) -> Unit,
     onOpenGroup: (roomKey: String) -> Unit,
 ) {
@@ -124,10 +142,13 @@ fun BotModeScreen(
     val chatOpenFailed = stringResource(R.string.bot_mode_chat_open_failed)
     val botCreateFailed = stringResource(R.string.bot_mode_create_failed)
 
-    LaunchedEffect(activeConnection?.id) {
-        while (true) {
-            connectionViewModel.refreshBotMode()
-            delay(BOT_MODE_REFRESH_MS)
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    LaunchedEffect(activeConnection?.id, lifecycle) {
+        lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            while (true) {
+                connectionViewModel.refreshBotModeInBackground()
+                delay(BOT_MODE_REFRESH_MS)
+            }
         }
     }
     LaunchedEffect(connections, selectedGatewayId) {
@@ -136,29 +157,34 @@ fun BotModeScreen(
         }
     }
 
+    val openBot: (BotRosterEntry) -> Unit = open@{ bot ->
+        val route = bot.route ?: return@open
+        if (openingRoute != null) return@open
+        openingRoute = route.key
+        scope.launch {
+            val result = connectionViewModel.ensureCanonicalBotChat(route)
+                .map { it.resolvedSessionId }
+            result.fold(
+                onSuccess = { onOpenBotChat(route, it) },
+                onFailure = { snackbar.showSnackbar(it.message ?: chatOpenFailed) },
+            )
+            openingRoute = null
+        }
+    }
+
     BotModeContent(
+        openPicker = openPicker,
+        onPickerHandled = onPickerHandled,
         state = state,
         connections = connections,
         activeConnection = activeConnection,
         selectedGatewayId = selectedGatewayId,
-        onBack = onBack,
+        onOpenSettings = onOpenSettings,
+        onOpenChat = onOpenChat,
         onRefresh = connectionViewModel::refreshBotMode,
         onSelectGateway = { selectedGatewayId = it },
         openingRoute = openingRoute,
-        onOpenBot = { bot ->
-            val route = bot.route ?: return@BotModeContent
-            if (openingRoute != null) return@BotModeContent
-            openingRoute = route.key
-            scope.launch {
-                val result = connectionViewModel.ensureCanonicalBotChat(route)
-                    .map { it.resolvedSessionId }
-                result.fold(
-                    onSuccess = { onOpenBotChat(route, it) },
-                    onFailure = { snackbar.showSnackbar(it.message ?: chatOpenFailed) },
-                )
-                openingRoute = null
-            }
-        },
+        onOpenBot = openBot,
         onOpenGroup = { onOpenGroup(it.key) },
         onNewBot = { showCreateBot = true },
         snackbarHost = { ThemedMessageHost(snackbar) },
@@ -173,6 +199,7 @@ fun BotModeScreen(
 
     if (showCreateBot) {
         CreateBotDialog(
+            gatewayLabel = connections.firstOrNull { it.id == (selectedGatewayId ?: activeConnection?.id) }?.label,
             saving = creatingBot,
             onDismiss = { showCreateBot = false },
             onCreate = { name, title, description ->
@@ -190,11 +217,13 @@ fun BotModeScreen(
                         )
                     }
                     createResult.fold(
-                        onSuccess = {
+                        onSuccess = { createdName ->
                             showCreateBot = false
-                            snackbar.showSnackbar(
-                                resources.getString(R.string.bot_mode_created, title),
-                            )
+                            val created = connectionViewModel.botModeState.value.roster.bots.firstOrNull {
+                                it.route?.connectionId == targetConnectionId && it.profile.name == createdName
+                            }
+                            if (created != null) openBot(created)
+                            else snackbar.showSnackbar(resources.getString(R.string.bot_mode_created, title))
                         },
                         onFailure = { snackbar.showSnackbar(it.message ?: botCreateFailed) },
                     )
@@ -208,11 +237,14 @@ fun BotModeScreen(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun BotModeContent(
+    openPicker: Boolean = false,
+    onPickerHandled: () -> Unit = {},
     state: BotModeState,
     connections: List<Connection>,
     activeConnection: Connection?,
     selectedGatewayId: String? = null,
-    onBack: () -> Unit,
+    onOpenSettings: () -> Unit,
+    onOpenChat: () -> Unit,
     onRefresh: () -> Unit,
     onSelectGateway: (String?) -> Unit,
     openingRoute: BotGatewayRouteKey? = null,
@@ -225,254 +257,194 @@ internal fun BotModeContent(
         BotFallbackAvatar(bot.displayName, size)
     },
 ) {
-    var filter by remember { mutableStateOf(BotModeFilter.All) }
-    var searchOpen by remember { mutableStateOf(false) }
-    var query by remember { mutableStateOf("") }
     var gatewayMenuOpen by remember { mutableStateOf(false) }
-    val visibleBots = state.roster.bots
-        .filterNot(BotRosterEntry::hidden)
-        .filter { selectedGatewayId == null || it.route?.connectionId == selectedGatewayId }
-    val visibleGroups = state.roster.groups.filter { group ->
-        selectedGatewayId == null || selectedGatewayId in group.sourceConnectionIds
+    var showNewChat by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(openPicker) {
+        if (openPicker) {
+            showNewChat = true
+            onPickerHandled()
+        }
     }
-    val activeBots = visibleBots.filter { bot ->
-        !bot.stale && bot.presenceActivityAtMs >= nowMs - ACTIVE_WINDOW_MS
-    }.sortedByDescending(BotRosterEntry::presenceActivityAtMs).take(6)
-    val needle = query.trim()
-    val rows = buildList<BotModeRow> {
-        if (filter != BotModeFilter.Groups) {
-            addAll(visibleBots.filter { bot ->
-                needle.isBlank() || listOf(
-                    bot.displayName,
-                    bot.profile.name,
-                    bot.profile.description,
-                    bot.latestPreview,
-                ).any { it.contains(needle, ignoreCase = true) }
-            }.map(BotModeRow::Bot))
-        }
-        if (filter != BotModeFilter.Bots) {
-            addAll(visibleGroups.filter { room ->
-                needle.isBlank() || room.name.contains(needle, ignoreCase = true) ||
-                    room.latestMessage?.text.orEmpty().contains(needle, ignoreCase = true)
-            }.map(BotModeRow::Group))
-        }
-    }.sortedByDescending(BotModeRow::activityAtMs)
+    val multiGateway = connections.size > 1
+    val showRecentShortcuts = LocalConfiguration.current.screenHeightDp >= 480
+    val visibleBots = remember(state.roster.bots, selectedGatewayId) {
+        state.roster.bots.filterNot(BotRosterEntry::hidden)
+            .filter { selectedGatewayId == null || it.route?.connectionId == selectedGatewayId }
+    }
+    val visibleGroups = remember(state.roster.groups, selectedGatewayId) {
+        state.roster.groups.filter { selectedGatewayId == null || selectedGatewayId in it.sourceConnectionIds }
+    }
+    val pinnedBots = remember(visibleBots) {
+        visibleBots.filter { !it.stale && it.latestActivityAtMs > 0L }
+            .sortedByDescending(BotRosterEntry::latestActivityAtMs).take(PINNED_BOT_COUNT)
+    }
+    val rows = remember(visibleBots, visibleGroups) {
+        (visibleBots.map(BotModeRow::Bot) + visibleGroups.map(BotModeRow::Group))
+            .sortedByDescending(BotModeRow::activityAtMs)
+    }
 
     Scaffold(
         containerColor = RelayRefresh.Background,
         snackbarHost = snackbarHost,
         topBar = {
-            TopAppBar(
-                title = {
-                    Text(
-                        stringResource(R.string.bot_mode_title),
-                        fontWeight = FontWeight.Bold,
-                    )
-                },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(
-                            Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = stringResource(R.string.onboarding_back),
-                        )
-                    }
-                },
-                actions = {
-                    IconButton(onClick = { searchOpen = !searchOpen }) {
-                        Icon(
-                            Icons.Filled.Search,
-                            contentDescription = stringResource(R.string.bot_mode_search),
-                            tint = if (searchOpen || query.isNotBlank()) {
-                                MaterialTheme.colorScheme.primary
-                            } else {
-                                MaterialTheme.colorScheme.onSurface
-                            },
-                        )
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = RelayRefresh.Background),
-            )
-        },
-        floatingActionButton = {
-            FloatingActionButton(
-                onClick = onNewBot,
-                containerColor = MaterialTheme.colorScheme.primary,
-                contentColor = MaterialTheme.colorScheme.onPrimary,
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .statusBarsPadding()
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Icon(Icons.Filled.Add, contentDescription = stringResource(R.string.bot_mode_new_bot))
-            }
-        },
-    ) { padding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding),
-        ) {
-            if (searchOpen || query.isNotBlank()) {
-                OutlinedTextField(
-                    value = query,
-                    onValueChange = { query = it },
-                    singleLine = true,
-                    placeholder = { Text(stringResource(R.string.bot_mode_search_hint)) },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 4.dp),
+                BotModeCircleButton(
+                    icon = Icons.Filled.AccountCircle,
+                    contentDescription = stringResource(R.string.cd_settings),
+                    onClick = onOpenSettings,
                 )
-            }
-
-            Box(modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)) {
-                Surface(
-                    onClick = { gatewayMenuOpen = true },
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(12.dp),
-                    color = MaterialTheme.colorScheme.surfaceContainer,
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.28f)),
-                ) {
+                Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
+                    // The title doubles as the gateway scope picker when there is more than one.
                     Row(
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                        modifier = Modifier
+                            .clip(CircleShape)
+                            .clickable(enabled = multiGateway) { gatewayMenuOpen = true }
+                            .heightIn(min = 48.dp)
+                            .padding(horizontal = 12.dp, vertical = 6.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Surface(
-                            shape = CircleShape,
-                            color = MaterialTheme.colorScheme.surfaceContainerHighest,
-                            modifier = Modifier.size(32.dp),
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Text(
-                                    activeConnection?.label?.trim()?.firstOrNull()?.uppercase() ?: "H",
-                                    style = MaterialTheme.typography.labelLarge,
-                                    fontWeight = FontWeight.Bold,
-                                )
-                            }
-                        }
-                        Spacer(Modifier.width(10.dp))
                         Text(
                             selectedGatewayId
                                 ?.let { id -> connections.firstOrNull { it.id == id }?.label }
-                                ?: stringResource(R.string.bot_mode_all_gateways),
-                            modifier = Modifier.weight(1f),
-                            style = MaterialTheme.typography.titleSmall,
+                                ?: stringResource(R.string.bot_mode_title),
+                            style = MaterialTheme.typography.titleLarge,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false),
                         )
-                        Icon(Icons.Filled.ExpandMore, contentDescription = null)
+                        if (multiGateway) {
+                            Icon(
+                                Icons.Filled.ExpandMore,
+                                contentDescription = stringResource(R.string.bot_mode_all_gateways),
+                            )
+                        }
                     }
-                }
-                DropdownMenu(
-                    expanded = gatewayMenuOpen,
-                    onDismissRequest = { gatewayMenuOpen = false },
-                ) {
-                    DropdownMenuItem(
-                        text = { Text(stringResource(R.string.bot_mode_all_gateways)) },
-                        leadingIcon = if (selectedGatewayId == null) {
-                            { Icon(Icons.Filled.Check, contentDescription = null) }
-                        } else null,
-                        onClick = {
-                            gatewayMenuOpen = false
-                            onSelectGateway(null)
-                        },
-                    )
-                    connections.forEach { connection ->
-                        val selected = connection.id == selectedGatewayId
-                        val gatewayStatus = state.gateways.firstOrNull { it.connectionId == connection.id }
+                    DropdownMenu(
+                        expanded = gatewayMenuOpen,
+                        onDismissRequest = { gatewayMenuOpen = false },
+                    ) {
                         DropdownMenuItem(
-                            text = {
-                                Column {
-                                    Text(connection.label)
-                                    if (gatewayStatus?.stale == true || gatewayStatus?.error != null) {
-                                        Text(
-                                            stringResource(R.string.bot_mode_offline),
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.error,
-                                        )
-                                    }
-                                }
-                            },
-                            leadingIcon = if (selected) {
+                            text = { Text(stringResource(R.string.bot_mode_all_gateways)) },
+                            leadingIcon = if (selectedGatewayId == null) {
                                 { Icon(Icons.Filled.Check, contentDescription = null) }
                             } else null,
                             onClick = {
                                 gatewayMenuOpen = false
-                                if (!selected) onSelectGateway(connection.id)
+                                onSelectGateway(null)
                             },
                         )
-                    }
-                }
-            }
-
-            BotModeFilterBar(filter = filter, onFilter = { filter = it })
-
-            if (activeBots.isNotEmpty() && filter != BotModeFilter.Groups && needle.isBlank()) {
-                Text(
-                    stringResource(R.string.bot_mode_active_now),
-                    style = MaterialTheme.typography.titleSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(start = 16.dp, top = 14.dp, bottom = 8.dp),
-                )
-                LazyRow(
-                    contentPadding = PaddingValues(horizontal = 16.dp),
-                    horizontalArrangement = Arrangement.spacedBy(18.dp),
-                ) {
-                    items(activeBots, key = { it.lazyItemKey }) { bot ->
-                        Column(
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            modifier = Modifier
-                                .width(78.dp)
-                                .clickable(enabled = openingRoute == null) { onOpenBot(bot) },
-                        ) {
-                            Box {
-                                botAvatar(bot, 56.dp)
-                                Surface(
-                                    modifier = Modifier
-                                        .align(Alignment.BottomEnd)
-                                        .size(14.dp),
-                                    shape = CircleShape,
-                                    color = ACTIVE_GREEN,
-                                    border = BorderStroke(2.dp, RelayRefresh.Background),
-                                ) {}
-                            }
-                            Spacer(Modifier.height(6.dp))
-                            Text(
-                                bot.displayName,
-                                style = MaterialTheme.typography.labelLarge,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                            Text(
-                                bot.route?.connectionLabel.orEmpty(),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
+                        connections.forEach { connection ->
+                            val selected = connection.id == selectedGatewayId
+                            val gatewayStatus = state.gateways.firstOrNull { it.connectionId == connection.id }
+                            DropdownMenuItem(
+                                text = {
+                                    Column {
+                                        Text(connection.label)
+                                        if (gatewayStatus?.stale == true || gatewayStatus?.error != null) {
+                                            Text(
+                                                stringResource(R.string.bot_mode_offline),
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.error,
+                                            )
+                                        }
+                                    }
+                                },
+                                leadingIcon = if (selected) {
+                                    { Icon(Icons.Filled.Check, contentDescription = null) }
+                                } else null,
+                                onClick = {
+                                    gatewayMenuOpen = false
+                                    if (!selected) onSelectGateway(connection.id)
+                                },
                             )
                         }
                     }
                 }
-                Spacer(Modifier.height(12.dp))
-                HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+                BotModeCircleButton(
+                    icon = Icons.Filled.Add,
+                    contentDescription = stringResource(R.string.bot_mode_new_chat),
+                    onClick = { showNewChat = true },
+                    primary = true,
+                )
             }
-
+        },
+    ) { padding ->
+        val refreshLabel = stringResource(R.string.bot_mode_refresh)
+        PullToRefreshBox(
+            isRefreshing = state.loading && rows.isNotEmpty(),
+            onRefresh = onRefresh,
+            modifier = Modifier.fillMaxSize().padding(padding).semantics {
+                customActions = listOf(CustomAccessibilityAction(refreshLabel) { onRefresh(); true })
+            },
+        ) {
             when {
-                state.loading && rows.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                state.loading && rows.isEmpty() -> Box(
+                    Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center,
+                ) {
                     CircularProgressIndicator(modifier = Modifier.size(28.dp), strokeWidth = 2.dp)
                 }
-                rows.isEmpty() -> BotModeEmptyState(error = state.error, onRefresh = onRefresh)
+                rows.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    BotModeEmptyState(error = state.error, onRefresh = onRefresh)
+                }
                 else -> LazyColumn(
                     modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(bottom = 96.dp, top = 4.dp),
+                    contentPadding = PaddingValues(bottom = 32.dp, top = 8.dp),
                 ) {
-                    itemsIndexed(
+                    if (showRecentShortcuts && pinnedBots.isNotEmpty()) {
+                        item(key = "pinned") {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                                horizontalArrangement = Arrangement.SpaceEvenly,
+                            ) {
+                                pinnedBots.forEach { bot ->
+                                    Column(
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .semantics(mergeDescendants = true) {}
+                                            .clip(RoundedCornerShape(16.dp))
+                                            .clickable(enabled = openingRoute == null, role = Role.Button) { onOpenBot(bot) }
+                                            .padding(horizontal = 4.dp, vertical = 8.dp),
+                                    ) {
+                                        botAvatar(bot, 64.dp)
+                                        Spacer(Modifier.height(8.dp))
+                                        Text(
+                                            bot.displayName,
+                                            style = MaterialTheme.typography.labelLarge,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            maxLines = 2,
+                                            overflow = TextOverflow.Ellipsis,
+                                            modifier = Modifier.heightIn(min = 36.dp),
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    items(
                         items = rows,
-                        key = { _, row -> when (row) {
+                        contentType = { row -> if (row is BotModeRow.Bot) "bot" else "group" },
+                        key = { row -> when (row) {
                             is BotModeRow.Bot -> row.value.lazyItemKey
                             is BotModeRow.Group -> "group:${row.value.key}"
                         } },
-                    ) { index, row ->
+                    ) { row ->
                         when (row) {
                             is BotModeRow.Bot -> BotConversationRow(
                                 bot = row.value,
-                                connectionLabel = row.value.route?.connectionLabel,
+                                // Same-named bots on different gateways need their source to tell them apart.
+                                connectionLabel = row.value.route?.connectionLabel?.takeIf { multiGateway },
                                 opening = openingRoute != null && openingRoute == row.value.route?.key,
+                                enabled = openingRoute == null,
                                 onClick = { onOpenBot(row.value) },
                                 avatar = { botAvatar(row.value, 56.dp) },
                                 nowMs = nowMs,
@@ -483,55 +455,168 @@ internal fun BotModeContent(
                                 nowMs = nowMs,
                             )
                         }
-                        if (index != rows.lastIndex) {
-                            HorizontalDivider(
-                                modifier = Modifier.padding(start = 88.dp, end = 16.dp),
-                                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f),
-                            )
-                        }
+                        HorizontalDivider(
+                            modifier = Modifier.padding(start = 88.dp, end = 16.dp),
+                            color = MaterialTheme.colorScheme.outlineVariant,
+                        )
                     }
                 }
             }
         }
     }
+
+    if (showNewChat) {
+        BotNewChatSheet(
+            bots = visibleBots,
+            createEnabled = connections.any {
+                it.id == (selectedGatewayId ?: activeConnection?.id) && it.resolvedDashboardUrl.isNotBlank()
+            },
+            onOpenChat = onOpenChat,
+            onDismiss = { showNewChat = false },
+            onCreate = {
+                showNewChat = false
+                onNewBot()
+            },
+            onOpen = { bot ->
+                showNewChat = false
+                onOpenBot(bot)
+            },
+            botAvatar = botAvatar,
+        )
+    }
+}
+
+/** The primary New action chooses a bot; Main chat is an explicit secondary route. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun BotNewChatSheet(
+    bots: List<BotRosterEntry>,
+    createEnabled: Boolean,
+    onOpenChat: () -> Unit,
+    onDismiss: () -> Unit,
+    onCreate: () -> Unit,
+    onOpen: (BotRosterEntry) -> Unit,
+    botAvatar: @Composable (BotRosterEntry, Dp) -> Unit,
+) {
+    var query by rememberSaveable { mutableStateOf("") }
+    val matches = remember(bots, query) {
+        val needle = query.trim()
+        bots.filter { bot ->
+            needle.isBlank() || listOf(bot.displayName, bot.profile.name, bot.profile.description,
+                bot.route?.connectionLabel.orEmpty()).any { it.contains(needle, ignoreCase = true) }
+        }
+    }
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+    ) {
+        Text(
+            stringResource(R.string.bot_mode_new_chat),
+            style = MaterialTheme.typography.titleLarge,
+            modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
+        )
+        OutlinedTextField(
+            value = query,
+            onValueChange = { query = it },
+            label = { Text(stringResource(R.string.bot_mode_search)) },
+            leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 8.dp),
+        )
+        LazyColumn(
+            modifier = Modifier.weight(1f, fill = false),
+            contentPadding = PaddingValues(bottom = 16.dp),
+        ) {
+            item(key = "create") {
+                BotSheetRow(onClick = onCreate, enabled = createEnabled) {
+                    Surface(
+                        shape = CircleShape,
+                        color = MaterialTheme.colorScheme.secondaryContainer,
+                        modifier = Modifier.size(48.dp),
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(Icons.Filled.Add, null, tint = MaterialTheme.colorScheme.onSecondaryContainer)
+                        }
+                    }
+                    Spacer(Modifier.width(16.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(stringResource(R.string.bot_mode_create), style = MaterialTheme.typography.titleMedium)
+                        if (!createEnabled) Text(
+                            stringResource(R.string.bot_mode_gateway_unavailable),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+            if (matches.isEmpty() && query.isNotBlank()) item(key = "no-results") {
+                Text(
+                    stringResource(R.string.chat_search_no_results),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 16.dp),
+                )
+            }
+            items(matches, key = { "to:" + it.lazyItemKey }, contentType = { "bot" }) { bot ->
+                BotSheetRow(onClick = { onOpen(bot) }) {
+                    botAvatar(bot, 48.dp)
+                    Spacer(Modifier.width(16.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(bot.displayName, style = MaterialTheme.typography.titleMedium,
+                            maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        Text(
+                            listOfNotNull(bot.route?.connectionLabel, "@${bot.handle}").joinToString(" · "),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        if (bot.stale) Text(stringResource(R.string.bot_mode_offline),
+                            style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
+                    }
+                }
+            }
+
+        }
+        HorizontalDivider(Modifier.padding(horizontal = 24.dp, vertical = 8.dp))
+        BotSheetRow(onClick = { onDismiss(); onOpenChat() }) {
+            Icon(Icons.Filled.ChatBubble, null,
+                modifier = Modifier.size(48.dp).padding(12.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.width(16.dp))
+            Text(stringResource(R.string.bot_mode_main_chat),
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
 }
 
 @Composable
-private fun BotModeFilterBar(filter: BotModeFilter, onFilter: (BotModeFilter) -> Unit) {
+private fun BotSheetRow(
+    onClick: () -> Unit,
+    enabled: Boolean = true,
+    content: @Composable RowScope.() -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth().heightIn(min = 64.dp)
+            .semantics(mergeDescendants = true) {}
+            .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
+            .padding(horizontal = 24.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        content = content,
+    )
+}
+
+@Composable
+private fun BotModeCircleButton(icon: ImageVector, contentDescription: String, onClick: () -> Unit, primary: Boolean = false) {
     Surface(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 4.dp),
-        shape = RoundedCornerShape(12.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerLow,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.28f)),
+        onClick = onClick,
+        modifier = Modifier.size(48.dp),
+        shape = CircleShape,
+        color = if (primary) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainerHigh,
+        contentColor = if (primary) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
     ) {
-        Row(modifier = Modifier.padding(4.dp)) {
-            BotModeFilter.entries.forEach { item ->
-                val selected = item == filter
-                Surface(
-                    onClick = { onFilter(item) },
-                    modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(9.dp),
-                    color = if (selected) {
-                        RelayRefresh.ElectricMuted.copy(alpha = 0.56f)
-                    } else Color.Transparent,
-                ) {
-                    Text(
-                        text = when (item) {
-                            BotModeFilter.All -> stringResource(R.string.bot_mode_filter_all)
-                            BotModeFilter.Bots -> stringResource(R.string.bot_mode_filter_bots)
-                            BotModeFilter.Groups -> stringResource(R.string.bot_mode_filter_groups)
-                        },
-                        modifier = Modifier.padding(vertical = 8.dp),
-                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                        color = if (selected) {
-                            RelayRefresh.Ink
-                        } else MaterialTheme.colorScheme.onSurfaceVariant,
-                        style = MaterialTheme.typography.labelLarge,
-                    )
-                }
-            }
+        Box(contentAlignment = Alignment.Center) {
+            Icon(icon, contentDescription = contentDescription, modifier = Modifier.size(22.dp))
         }
     }
 }
@@ -541,6 +626,7 @@ private fun BotConversationRow(
     bot: BotRosterEntry,
     connectionLabel: String?,
     opening: Boolean,
+    enabled: Boolean,
     onClick: () -> Unit,
     avatar: @Composable () -> Unit,
     nowMs: Long,
@@ -548,46 +634,53 @@ private fun BotConversationRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(enabled = !opening, onClick = onClick)
+            .semantics(mergeDescendants = true) {}
+            .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
             .padding(horizontal = 16.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        avatar()
-        Spacer(Modifier.width(14.dp))
+        Box(contentAlignment = Alignment.Center) {
+            avatar()
+            if (opening) Surface(shape = CircleShape, color = MaterialTheme.colorScheme.surface) {
+                CircularProgressIndicator(Modifier.size(28.dp).padding(4.dp), strokeWidth = 2.dp)
+            }
+        }
+        Spacer(Modifier.width(16.dp))
         Column(modifier = Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     bot.displayName,
                     style = MaterialTheme.typography.titleMedium,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    bot.latestActivityAtMs.toBotModeTime(nowMs),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.widthIn(max = 112.dp),
+                )
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    listOfNotNull(connectionLabel?.takeIf(String::isNotBlank), "@${bot.handle}").joinToString(" · "),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f),
                 )
-                Text(
-                    bot.latestActivityAtMs.toBotModeTime(nowMs),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            if (!connectionLabel.isNullOrBlank()) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        "$connectionLabel · @${bot.handle}",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.primary,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    if (bot.stale) {
-                        Spacer(Modifier.width(6.dp))
-                        Text(
-                            stringResource(R.string.bot_mode_offline),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.error,
-                        )
-                    }
+                if (bot.stale) {
+                    Spacer(Modifier.width(8.dp))
+                    Text(stringResource(R.string.bot_mode_offline), style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.error)
                 }
             }
+            Spacer(Modifier.height(3.dp))
             Text(
                 when {
                     opening -> stringResource(R.string.bot_mode_opening_chat)
@@ -597,7 +690,7 @@ private fun BotConversationRow(
                 },
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
+                maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
         }
@@ -609,7 +702,8 @@ private fun BotGroupRow(room: BotGroupRoom, onClick: () -> Unit, nowMs: Long) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
+            .semantics(mergeDescendants = true) {}
+            .clickable(role = Role.Button, onClick = onClick)
             .padding(horizontal = 16.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -626,8 +720,11 @@ private fun BotGroupRow(room: BotGroupRoom, onClick: () -> Unit, nowMs: Long) {
                 )
                 Text(
                     room.latestActivityAtMs.toBotModeTime(nowMs),
-                    style = MaterialTheme.typography.labelMedium,
+                    style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.widthIn(max = 112.dp).padding(start = 8.dp),
                 )
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -704,26 +801,27 @@ private fun BotProfileAvatar(
     bot: BotRosterEntry,
     size: Dp,
 ) {
-    val pathFlow = bot.route?.let { route ->
-        connectionViewModel.profileIconFlow(route.connectionId, route.profileName)
-    } ?: connectionViewModel.profileIconFlow(bot.profile.name)
+    val pathFlow = remember(connectionViewModel, bot.route?.key, bot.profile.name) {
+        bot.route?.let { route ->
+            connectionViewModel.profileIconFlow(route.connectionId, route.profileName)
+        } ?: connectionViewModel.profileIconFlow(bot.profile.name)
+    }
     val path by pathFlow.collectAsState(initial = null)
+    BotAvatar(path, bot.displayName, size)
+}
+
+@Composable
+internal fun BotAvatar(path: String?, label: String, size: Dp) {
     if (path.isNullOrBlank()) {
-        BotFallbackAvatar(bot.displayName, size)
+        BotFallbackAvatar(label, size)
     } else {
-        Surface(
+        SubcomposeAsyncImage(
+            model = File(path),
+            contentDescription = null,
+            contentScale = ContentScale.Fit,
             modifier = Modifier.size(size),
-            shape = CircleShape,
-            color = MaterialTheme.colorScheme.primaryContainer,
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.55f)),
-        ) {
-            AsyncImage(
-                model = File(path.orEmpty()),
-                contentDescription = null,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize(),
-            )
-        }
+            error = { BotFallbackAvatar(label, size) },
+        )
     }
 }
 
@@ -732,15 +830,14 @@ internal fun BotFallbackAvatar(label: String, size: Dp) {
     Surface(
         modifier = Modifier.size(size),
         shape = CircleShape,
-        color = RelayRefresh.Navy3,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.55f)),
+        color = botAvatarColor(label),
     ) {
         Box(contentAlignment = Alignment.Center) {
             Text(
                 label.trim().firstOrNull()?.uppercase() ?: "H",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold,
-                color = RelayRefresh.Relay,
+                color = Color(0xFF1B1B1F),
             )
         }
     }
@@ -879,18 +976,23 @@ private fun BotGroupMessageBubble(message: BotGroupMessage) {
 
 @Composable
 private fun CreateBotDialog(
+    gatewayLabel: String?,
     saving: Boolean,
     onDismiss: () -> Unit,
     onCreate: (name: String, title: String, description: String) -> Unit,
 ) {
-    var name by remember { mutableStateOf("") }
-    var title by remember { mutableStateOf("") }
-    var description by remember { mutableStateOf("") }
+    var name by rememberSaveable { mutableStateOf("") }
+    var title by rememberSaveable { mutableStateOf("") }
+    var description by rememberSaveable { mutableStateOf("") }
     AlertDialog(
         onDismissRequest = { if (!saving) onDismiss() },
         title = { Text(stringResource(R.string.bot_mode_new_bot)) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                gatewayLabel?.let { Text(it, style = MaterialTheme.typography.labelLarge) }
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it.lowercase().replace(' ', '-').take(64) },
@@ -941,6 +1043,14 @@ private fun Long.toBotModeTime(nowMs: Long): String {
     ).toString()
 }
 
-private const val ACTIVE_WINDOW_MS = 90_000L
+private const val PINNED_BOT_COUNT = 3
 private const val BOT_MODE_REFRESH_MS = 30_000L
-private val ACTIVE_GREEN = Color(0xFF4DD675)
+
+private val BOT_AVATAR_COLORS = listOf(
+    Color(0xFF5BC0A9), Color(0xFFEF7A3A), Color(0xFF9B6BF2),
+    Color(0xFFEC4F9C), Color(0xFFEF4A4A), Color(0xFF4A86F0),
+)
+
+/** Stable per-bot colour so a bot keeps its colour across lists and chats. */
+internal fun botAvatarColor(label: String): Color =
+    BOT_AVATAR_COLORS[Math.floorMod(label.trim().lowercase().hashCode(), BOT_AVATAR_COLORS.size)]

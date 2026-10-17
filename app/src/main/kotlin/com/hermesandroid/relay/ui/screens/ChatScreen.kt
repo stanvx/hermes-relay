@@ -60,9 +60,9 @@ import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.outlined.EditNote
-import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Tune
@@ -76,7 +76,6 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Surface
 import androidx.compose.material3.DrawerValue
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -200,7 +199,6 @@ import com.hermesandroid.relay.data.SupervisedAttachmentCategory
 import com.hermesandroid.relay.data.SupervisedModePolicy
 import com.hermesandroid.relay.data.SupervisedSessionAction
 import com.hermesandroid.relay.data.allowsSessionAction
-import com.hermesandroid.relay.data.VoicePresentationMode
 import com.hermesandroid.relay.data.hermesProcessNotificationOrNull
 import com.hermesandroid.relay.ui.components.AgentInfoSheet
 import com.hermesandroid.relay.ui.components.BackgroundTaskCard
@@ -215,7 +213,6 @@ import com.hermesandroid.relay.ui.components.ChatFailurePanel
 import com.hermesandroid.relay.viewmodel.ChatFailureRoute
 import com.hermesandroid.relay.viewmodel.ChatFailureNotice
 import com.hermesandroid.relay.viewmodel.scopedChatFailure
-import com.hermesandroid.relay.ui.components.ConversationVoiceDock
 import com.hermesandroid.relay.ui.components.ChatInputPickerControl
 import com.hermesandroid.relay.ui.components.ChatInputPickerOption
 import com.hermesandroid.relay.ui.components.ChatInputTrailing
@@ -590,10 +587,8 @@ internal fun shouldFollowConversationViewportResize(
     userDragging: Boolean,
     imeBottomPx: Int,
     followImeResize: Boolean,
-    voiceDockAnchorTransitionActive: Boolean,
 ): Boolean = !userScrolledAway &&
     !userDragging &&
-    !voiceDockAnchorTransitionActive &&
     (followImeResize || imeBottomPx == 0)
 
 private fun LazyListState.isAtConversationBottom(slopPx: Int): Boolean {
@@ -612,7 +607,7 @@ private fun LazyListState.visibleConversationBottomDistancePx(): Int? {
     return ((footer.offset + footer.size) - layout.viewportEndOffset).coerceAtLeast(0)
 }
 
-private suspend fun LazyListState.scrollToConversationBottom(
+internal suspend fun LazyListState.scrollToConversationBottom(
     animated: Boolean,
     slopPx: Int,
 ) {
@@ -762,8 +757,6 @@ fun ChatScreen(
     voiceViewModel: VoiceViewModel,
     voiceClient: RelayVoiceClient? = null,
     maxBubbleWidth: Dp = 300.dp,
-    voicePresentationMode: VoicePresentationMode = VoicePresentationMode.Focus,
-    onVoicePresentationModeChange: (VoicePresentationMode) -> Unit = {},
     // Deep-link nudge from Settings → Active Agent card: when `true`, the
     // AgentInfoSheet auto-opens on first composition and [onAgentSheetArgConsumed]
     // fires so the host can clear the nav arg (prevents re-open on tab
@@ -791,12 +784,18 @@ fun ChatScreen(
     onNavigateToProfileInspector: (String) -> Unit = {},
     supervisedPolicy: SupervisedModePolicy = SupervisedModePolicy(),
     onNavigateToBotMode: () -> Unit = {},
+    onBackToBots: (() -> Unit)? = null,
+    onNewBotChat: (() -> Unit)? = null,
     gitWorkspaceSummary: ChatGitWorkspaceSummary? = null,
     gitWorkspaceAvailable: Boolean = gitWorkspaceSummary != null,
     onNavigateToGitWorkspace: () -> Unit = {},
 ) {
     val responsiveLayout = chatResponsiveLayout(LocalConfiguration.current.screenWidthDp)
     val supervised = supervisedPolicy.enabled
+    val startNewConversation: () -> Unit = {
+        if (!supervised && onNewBotChat != null) onNewBotChat()
+        else chatViewModel.createNewChat()
+    }
     val supervisedVisibility = supervisedPolicy.visibility.resolved()
     LaunchedEffect(supervisedPolicy) {
         voiceViewModel.updateSupervisedModePolicy(supervisedPolicy)
@@ -830,25 +829,11 @@ fun ChatScreen(
     val voiceUiState by voiceViewModel.uiState.collectAsState()
     val responseSpeechActive by voiceViewModel.responseSpeechActive.collectAsState()
     val isDemoMode by connectionViewModel.isDemoMode.collectAsState()
-    var voicePresentationOverride by remember { mutableStateOf<VoicePresentationMode?>(null) }
-    val effectiveVoicePresentationMode = voicePresentationOverride ?: voicePresentationMode
-    val conversationVoiceDockVisible =
-        voiceUiState.voiceMode &&
-            effectiveVoicePresentationMode == VoicePresentationMode.Conversation
-    val setVoicePresentationMode: (VoicePresentationMode) -> Unit = { mode ->
-        voicePresentationOverride = mode
-        onVoicePresentationModeChange(mode)
-    }
     val chatAlpha by animateFloatAsState(
-        targetValue = if (
-            voiceUiState.voiceMode && effectiveVoicePresentationMode == VoicePresentationMode.Focus
-        ) 0.4f else 1f,
+        targetValue = if (voiceUiState.voiceMode) 0.4f else 1f,
         animationSpec = tween(300),
         label = "chatAlpha",
     )
-    LaunchedEffect(voiceUiState.voiceMode) {
-        if (!voiceUiState.voiceMode) voicePresentationOverride = null
-    }
     // Route classified chat errors (media cache, streaming failures, …) to
     // the app-wide snackbar. Same pattern every VM-bound screen uses.
     val snackbarHost = LocalSnackbarHost.current
@@ -881,7 +866,6 @@ fun ChatScreen(
             micPermissionDenied = false
             if (pendingVoiceEnter && !isDemoMode) {
                 pendingVoiceEnter = false
-                setVoicePresentationMode(VoicePresentationMode.Conversation)
                 com.hermesandroid.relay.wake.WakeWordForegroundService.prepareForVoice()
                 voiceViewModel.enterVoiceMode()
             } else {
@@ -889,7 +873,6 @@ fun ChatScreen(
             }
         } else {
             pendingVoiceEnter = false
-            voicePresentationOverride = null
             micPermissionDenied = true
         }
     }
@@ -900,7 +883,6 @@ fun ChatScreen(
         ) == android.content.pm.PackageManager.PERMISSION_GRANTED
         if (granted) {
             micPermissionDenied = false
-            setVoicePresentationMode(VoicePresentationMode.Conversation)
             com.hermesandroid.relay.wake.WakeWordForegroundService.prepareForVoice()
             voiceViewModel.enterVoiceMode()
         } else {
@@ -2001,35 +1983,6 @@ fun ChatScreen(
             }
         }
     }
-    var voiceDockAnchorGuardReady by remember { mutableStateOf(false) }
-    var voiceDockAnchorTransitionActive by remember { mutableStateOf(false) }
-    LaunchedEffect(conversationVoiceDockVisible) {
-        if (!voiceDockAnchorGuardReady) {
-            voiceDockAnchorGuardReady = true
-            return@LaunchedEffect
-        }
-        if (messages.isEmpty()) return@LaunchedEffect
-
-        // The dock expands inside the composer for 240 ms. Keep the transcript's
-        // leading visible row fixed while that changes the LazyColumn viewport;
-        // otherwise a conversation parked at the bottom is clamped forward on
-        // every animation frame and appears to scroll when voice mode opens.
-        val anchorIndex = listState.firstVisibleItemIndex
-        val anchorOffset = listState.firstVisibleItemScrollOffset
-        voiceDockAnchorTransitionActive = true
-        try {
-            var firstFrameNanos = 0L
-            var frameNanos: Long
-            do {
-                if (isUserDragging) return@LaunchedEffect
-                listState.requestScrollToItem(anchorIndex, anchorOffset)
-                frameNanos = withFrameNanos { it }
-                if (firstFrameNanos == 0L) firstFrameNanos = frameNanos
-            } while (frameNanos - firstFrameNanos < 300_000_000L)
-        } finally {
-            voiceDockAnchorTransitionActive = false
-        }
-    }
     // Reaching the bottom by any means (user, follow-pin, content shrank)
     // always re-arms auto-follow.
     LaunchedEffect(isAtBottom) {
@@ -2321,8 +2274,7 @@ fun ChatScreen(
                 tailSizePx = tailSize,
                 viewportHeightPx = listState.layoutInfo.viewportSize.height,
                 visibleBottomDistancePx = listState.visibleConversationBottomDistancePx(),
-                followTailGrowth = !voiceDockAnchorTransitionActive &&
-                    !isUserDragging &&
+                followTailGrowth = !isUserDragging &&
                     smoothAutoScroll &&
                     !userScrolledAway,
                 followViewportResize = shouldFollowConversationViewportResize(
@@ -2330,7 +2282,6 @@ fun ChatScreen(
                     userDragging = isUserDragging,
                     imeBottomPx = latestImeBottomPx,
                     followImeResize = followImeResize,
-                    voiceDockAnchorTransitionActive = voiceDockAnchorTransitionActive,
                 ),
             )
         }
@@ -2515,6 +2466,90 @@ fun ChatScreen(
         }
     }
 
+    val conversationActions: @Composable (() -> Unit) -> Unit = { dismiss ->
+        currentSessionId?.takeIf { !supervised && it.isNotBlank() }?.let { sessionId ->
+            DropdownMenuItem(
+                text = { Text(copySessionIdLabel) },
+                leadingIcon = {
+                    Icon(Icons.Filled.ContentCopy, contentDescription = null)
+                },
+                onClick = {
+                    dismiss()
+                    scope.launch { drawerState.close() }
+                    scope.launch {
+                        clipboard.setClipEntry(
+                            ClipEntry(
+                                ClipData.newPlainText(
+                                    copySessionIdLabel,
+                                    sessionId,
+                                )
+                            )
+                        )
+                        snackbarHostState.showSnackbar(
+                            message = copiedToClipboardMsg,
+                            duration = SnackbarDuration.Short,
+                        )
+                    }
+                },
+            )
+        }
+        if (!supervised && messages.isNotEmpty()) {
+            DropdownMenuItem(
+                text = { Text(stringResource(R.string.chat_search_conversation)) },
+                leadingIcon = {
+                    Icon(Icons.Filled.Search, contentDescription = null)
+                },
+                onClick = {
+                    dismiss()
+                    scope.launch { drawerState.close() }
+                    showTranscriptSearch = true
+                },
+            )
+            DropdownMenuItem(
+                text = { Text(stringResource(R.string.chat_share_conversation)) },
+                leadingIcon = {
+                    Icon(
+                        imageVector = Icons.Filled.Share,
+                        contentDescription = null,
+                    )
+                },
+                onClick = {
+                    dismiss()
+                    scope.launch { drawerState.close() }
+                    shareConversation(context, messages)
+                },
+            )
+        } else if (
+            messages.isNotEmpty() &&
+            supervisedPolicy.allowsSessionAction(
+                SupervisedSessionAction.ShareTranscript,
+            )
+        ) {
+            DropdownMenuItem(
+                text = { Text(stringResource(R.string.chat_share_conversation)) },
+                leadingIcon = {
+                    Icon(Icons.Filled.Share, contentDescription = null)
+                },
+                onClick = {
+                    dismiss()
+                    scope.launch { drawerState.close() }
+                    shareConversation(context, messages)
+                },
+            )
+        }
+        if (!supervised && isCleanLayout) {
+            DropdownMenuItem(
+                text = { Text(stringResource(R.string.cd_terminal)) },
+                leadingIcon = { Icon(Icons.Filled.Code, contentDescription = null) },
+                onClick = {
+                    dismiss()
+                    scope.launch { drawerState.close() }
+                    onNavigateToTerminal()
+                },
+            )
+        }
+    }
+
     BoxWithConstraints {
         // Available chat width in dp drives the wide-layout threshold; the
         // pure resolver decides Sidebar vs Modal from it + the pin intent.
@@ -2619,9 +2654,14 @@ fun ChatScreen(
                     scope.launch { drawerState.close() }
                     onNavigateToBotMode()
                 },
+                conversationActions = conversationActions,
+                onOpenSettings = {
+                    scope.launch { drawerState.close() }
+                    onNavigateToSettings()
+                },
                 onNewChat = {
                     if (!supervised || supervisedPolicy.capabilities.newChat) {
-                        chatViewModel.createNewChat()
+                        startNewConversation()
                         scope.launch { drawerState.close() }
                     }
                 },
@@ -2858,16 +2898,12 @@ fun ChatScreen(
             TopAppBar(
                 modifier = Modifier.onSizeChanged { chatHeaderHeightPx = it.height },
                 navigationIcon = {
-                    // While the pinned sidebar is the sessions surface the
-                    // hamburger would only stack a second modal sessions
-                    // drawer over it — the pin/unpin affordance lives in the
-                    // sidebar header instead, so the control is omitted.
-                    if (!isPinnedSidebar && sessionsHistoryAllowed) {
-                        IconButton(onClick = { scope.launch { drawerState.open() } }) {
-                            Icon(Icons.Filled.Menu, contentDescription = stringResource(R.string.cd_sessions))
+                    if (!supervised && onBackToBots != null) {
+                        IconButton(onClick = onBackToBots) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.bot_mode_back_to_bots))
                         }
                     } else if (supervised && !sessionsHistoryAllowed && supervisedPolicy.capabilities.newChat) {
-                        IconButton(onClick = { chatViewModel.createNewChat() }) {
+                        IconButton(onClick = startNewConversation) {
                             Icon(Icons.Filled.Edit, contentDescription = "New chat")
                         }
                     }
@@ -3173,8 +3209,7 @@ fun ChatScreen(
                             )
                         }
                     }
-                    // Clean layout folds Terminal + Settings into the ⋮ menu so
-                    // the header carries only identity plus one action.
+                    // Clean layout keeps navigation and conversation actions in Sessions.
                     if (!cleanLayout) {
                         RelayChromeIconButton(
                             icon = Icons.Filled.Tune,
@@ -3187,7 +3222,7 @@ fun ChatScreen(
                     // sessions keep their own new-chat placement.
                     if (cleanLayout && !supervised && sessionsHistoryAllowed) {
                         IconButton(
-                            onClick = { chatViewModel.createNewChat() },
+                            onClick = startNewConversation,
                             modifier = Modifier.testTag("chat-header-new-chat"),
                         ) {
                             Icon(
@@ -3196,129 +3231,23 @@ fun ChatScreen(
                             )
                         }
                     }
-                    // Share is the least-used trailing action (and only valid
-                    // once there's a conversation), so it folds into a ⋮
-                    // overflow instead of competing for width with Terminal +
-                    // Settings — which is what was squeezing the title subtitle.
-                    // Session identity is useful before the first message; sharing only appears
-                    // once the conversation has content.
-                    if (
-                        cleanLayout ||
-                        (!supervised && (messages.isNotEmpty() || !currentSessionId.isNullOrBlank())) ||
-                        (supervised && messages.isNotEmpty() &&
-                            supervisedPolicy.allowsSessionAction(SupervisedSessionAction.ShareTranscript))
-                    ) {
-                        var showOverflowMenu by remember { mutableStateOf(false) }
-                        Box {
-                            if (cleanLayout) {
-                                IconButton(onClick = { showOverflowMenu = true }) {
-                                    Icon(
-                                        imageVector = Icons.Filled.MoreVert,
-                                        contentDescription = stringResource(R.string.chat_more_actions_a11y),
-                                    )
-                                }
-                            } else {
-                                RelayChromeIconButton(
-                                    icon = Icons.Filled.MoreVert,
-                                    contentDescription = stringResource(R.string.chat_more_actions_a11y),
-                                    onClick = { showOverflowMenu = true },
-                                    modifier = Modifier.padding(end = 4.dp),
-                                )
+                    if (!isPinnedSidebar && sessionsHistoryAllowed) {
+                        IconButton(onClick = { scope.launch { drawerState.open() } }) {
+                            Icon(Icons.Filled.History, contentDescription = stringResource(R.string.cd_sessions))
+                        }
+                    }
+                    if (supervised && !sessionsHistoryAllowed) {
+                        if (messages.isNotEmpty() && supervisedPolicy.allowsSessionAction(
+                                SupervisedSessionAction.ShareTranscript,
+                            )
+                        ) {
+                            IconButton(onClick = { shareConversation(context, messages) }) {
+                                Icon(Icons.Filled.Share, contentDescription = stringResource(R.string.chat_share_conversation))
                             }
-                            DropdownMenu(
-                                expanded = showOverflowMenu,
-                                onDismissRequest = { showOverflowMenu = false },
-                            ) {
-                                if (cleanLayout) {
-                                    if (!supervised) {
-                                        DropdownMenuItem(
-                                            text = { Text(stringResource(R.string.cd_terminal)) },
-                                            leadingIcon = {
-                                                Icon(Icons.Filled.Code, contentDescription = null)
-                                            },
-                                            onClick = {
-                                                showOverflowMenu = false
-                                                onNavigateToTerminal()
-                                            },
-                                        )
-                                    }
-                                    DropdownMenuItem(
-                                        text = { Text(stringResource(R.string.cd_settings)) },
-                                        leadingIcon = {
-                                            Icon(Icons.Filled.Tune, contentDescription = null)
-                                        },
-                                        onClick = {
-                                            showOverflowMenu = false
-                                            onNavigateToSettings()
-                                        },
-                                    )
-                                }
-                                currentSessionId?.takeIf { !supervised && it.isNotBlank() }?.let { sessionId ->
-                                    DropdownMenuItem(
-                                        text = { Text(copySessionIdLabel) },
-                                        leadingIcon = {
-                                            Icon(Icons.Filled.ContentCopy, contentDescription = null)
-                                        },
-                                        onClick = {
-                                            showOverflowMenu = false
-                                            scope.launch {
-                                                clipboard.setClipEntry(
-                                                    ClipEntry(
-                                                        ClipData.newPlainText(
-                                                            copySessionIdLabel,
-                                                            sessionId,
-                                                        )
-                                                    )
-                                                )
-                                                snackbarHostState.showSnackbar(
-                                                    message = copiedToClipboardMsg,
-                                                    duration = SnackbarDuration.Short,
-                                                )
-                                            }
-                                        },
-                                    )
-                                }
-                                if (!supervised && messages.isNotEmpty()) {
-                                    DropdownMenuItem(
-                                        text = { Text(stringResource(R.string.chat_search_conversation)) },
-                                        leadingIcon = {
-                                            Icon(Icons.Filled.Search, contentDescription = null)
-                                        },
-                                        onClick = {
-                                            showOverflowMenu = false
-                                            showTranscriptSearch = true
-                                        },
-                                    )
-                                    DropdownMenuItem(
-                                        text = { Text(stringResource(R.string.chat_share_conversation)) },
-                                        leadingIcon = {
-                                            Icon(
-                                                imageVector = Icons.Filled.Share,
-                                                contentDescription = null,
-                                            )
-                                        },
-                                        onClick = {
-                                            showOverflowMenu = false
-                                            shareConversation(context, messages)
-                                        },
-                                    )
-                                } else if (
-                                    messages.isNotEmpty() &&
-                                    supervisedPolicy.allowsSessionAction(
-                                        SupervisedSessionAction.ShareTranscript,
-                                    )
-                                ) {
-                                    DropdownMenuItem(
-                                        text = { Text(stringResource(R.string.chat_share_conversation)) },
-                                        leadingIcon = {
-                                            Icon(Icons.Filled.Share, contentDescription = null)
-                                        },
-                                        onClick = {
-                                            showOverflowMenu = false
-                                            shareConversation(context, messages)
-                                        },
-                                    )
-                                }
+                        }
+                        if (cleanLayout) {
+                            IconButton(onClick = onNavigateToSettings) {
+                                Icon(Icons.Filled.Tune, contentDescription = stringResource(R.string.cd_settings))
                             }
                         }
                     }
@@ -4788,6 +4717,13 @@ fun ChatScreen(
                         },
                         onStartVoice = requestVoiceMode,
                         onSetupNotice = {
+                            // Sign-in is the one fix the user can make right now; supervised mode hides it.
+                            if (!supervised && standardVoiceAvailability ==
+                                com.hermesandroid.relay.viewmodel.StandardVoiceAvailability.SignInRequired
+                            ) {
+                                onNavigateToDashboardSignIn()
+                                return@dispatchChatVoiceAction
+                            }
                             UiMessageBus.warning(when (standardVoiceAvailability) {
                                     com.hermesandroid.relay.viewmodel.StandardVoiceAvailability.SignInRequired ->
                                         standardVoiceSignInRouteHint?.let { route ->
@@ -4873,7 +4809,7 @@ fun ChatScreen(
                 charLimit = charLimit,
                 caption = turnStatus ?: inputCaption,
                 voiceReady = voiceReady,
-                showVoiceHint = !voiceHintSeen && !conversationVoiceDockVisible,
+                showVoiceHint = !voiceHintSeen,
                 onVoiceHintShown = { connectionViewModel.setVoiceHintSeen(true) },
                 isDarkTheme = isDarkTheme,
                 physicalEnterSends = physicalKeyboardEnterBehavior ==
@@ -4939,31 +4875,6 @@ fun ChatScreen(
                 },
                 effortControl = effortControl,
                 onEffortPickerClick = { showEffortSheet = true },
-                topContent = {
-                    ConversationVoiceDock(
-                        uiState = voiceUiState,
-                        engineMode = effectiveVoiceEngineMode,
-                        provider = activeVoiceProvider,
-                        model = activeVoiceModel,
-                        voice = activeVoiceName,
-                        profileName = AgentDisplay.profileDisplayName(effectiveProfile),
-                        outputEnabled = activeVoiceEnabled,
-                        onMicTap = { voiceViewModel.startListening() },
-                        onMicRelease = { voiceViewModel.stopListening() },
-                        onInterrupt = { voiceViewModel.interruptSpeaking() },
-                        onPauseAutoMode = { voiceViewModel.pauseContinuousMode() },
-                        onModeChange = { voiceViewModel.setInteractionMode(it) },
-                        onFocusRequest = {
-                            setVoicePresentationMode(VoicePresentationMode.Focus)
-                        },
-                        onOverlayRequest = showVoiceSystemOverlay,
-                        systemOverlayAvailable = voiceSystemOverlayAvailable,
-                        onOpenSettings = onNavigateToVoiceSettings,
-                        onExit = { voiceViewModel.exitVoiceMode() },
-                    )
-                },
-                topContentVisible = conversationVoiceDockVisible,
-                suppressVoiceTrailing = conversationVoiceDockVisible,
                 // Measure the visible composer Surface as a Desktop-style
                 // ledge. Registering the outer input column includes its 6dp
                 // visual margin and makes a correctly grounded pet look raised.
@@ -5120,7 +5031,6 @@ fun ChatScreen(
                 onInterrupt = { voiceViewModel.interruptSpeaking() },
                 onPauseAutoMode = { voiceViewModel.pauseContinuousMode() },
                 onDismiss = { voiceViewModel.exitVoiceMode() },
-                onModeChange = { voiceViewModel.setInteractionMode(it) },
                 onClearError = { voiceViewModel.clearError() },
                 onBackgroundRunCancel = { voiceViewModel.cancelBackgroundRun() },
                 onBackgroundRunTap = { voiceViewModel.respeakBackgroundResult() },
@@ -5135,20 +5045,6 @@ fun ChatScreen(
                 transcriptMessages = messages.takeLast(12),
                 showThinking = showThinking,
                 voiceEngineMode = effectiveVoiceEngineMode,
-                voiceOutputProvider = activeVoiceProvider,
-                voiceOutputModel = activeVoiceModel,
-                voiceOutputVoice = activeVoiceName,
-                voiceProfileName = AgentDisplay.profileDisplayName(effectiveProfile),
-                voiceOutputEnabled = activeVoiceEnabled,
-                voiceOutputFallbackEnabled = voiceOutputConfig?.fallback_enabled,
-                presentationMode = effectiveVoicePresentationMode,
-                onPresentationModeChange = setVoicePresentationMode,
-                onOverlayRequest = showVoiceSystemOverlay,
-                systemOverlayAvailable = voiceSystemOverlayAvailable,
-                // Gear button in the overlay's expanded controls. The overlay
-                // exits voice mode before invoking this, so navigation lands
-                // on Voice Settings with no overlay left on top.
-                onOpenSettings = onNavigateToVoiceSettings,
                 // === v0.4.1 JIT permission-denied chip ===
                 // Tap deep-links to Settings → Apps → Hermes-Relay →
                 // Permissions for the running package. Use BuildConfig
@@ -5720,7 +5616,7 @@ private fun compactQuoteExcerpt(content: String): String =
  * rather than throwing. [mimeOverride] lets clipboard paste supply the MIME
  * when the resolver can't (some providers don't resolve a type until read).
  */
-private suspend fun ingestAttachmentFromUri(
+internal suspend fun ingestAttachmentFromUri(
     context: android.content.Context,
     uri: Uri,
     maxAttachmentMb: Int,

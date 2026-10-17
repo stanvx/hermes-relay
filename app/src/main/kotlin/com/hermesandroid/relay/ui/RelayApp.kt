@@ -71,8 +71,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.createSavedStateHandle
+import androidx.lifecycle.viewmodel.initializer
+import androidx.lifecycle.viewmodel.viewModelFactory
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavGraph.Companion.findStartDestination
+import androidx.navigation.NavHostController
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -143,7 +146,6 @@ import com.hermesandroid.relay.data.EndpointCandidate
 import com.hermesandroid.relay.data.FeatureFlags
 import com.hermesandroid.relay.data.SupervisedModePolicy
 import com.hermesandroid.relay.data.SupervisedModeStore
-import com.hermesandroid.relay.data.VoicePresentationMode
 import com.hermesandroid.relay.data.capabilities
 import com.hermesandroid.relay.data.displayLabel
 import kotlinx.coroutines.Dispatchers
@@ -167,6 +169,7 @@ import com.hermesandroid.relay.ui.screens.BridgeScreen
 // === PHASE3-safety-rails: bridge safety route ===
 import com.hermesandroid.relay.ui.screens.BridgeSafetySettingsScreen
 import com.hermesandroid.relay.ui.screens.BotGroupDetailScreen
+import com.hermesandroid.relay.ui.screens.lazyItemKey
 import com.hermesandroid.relay.ui.screens.BotChatScreen
 import com.hermesandroid.relay.ui.screens.BotModeScreen
 // === END PHASE3-safety-rails ===
@@ -409,16 +412,6 @@ internal fun shouldShowStatusStrip(
 ): Boolean = layoutStyle == LayoutStyle.CLASSIC || reconnecting || (offline && !demoMode)
 
 /**
- * Conversation voice remains part of chat, so its persistent connection
- * footer stays visible. Focus voice is the only presentation that suppresses
- * the surrounding chat chrome.
- */
-internal fun shouldShowConnectionFooter(
-    voiceMode: Boolean,
-    presentationMode: VoicePresentationMode,
-): Boolean = !voiceMode || presentationMode == VoicePresentationMode.Conversation
-
-/**
  * Full-screen setup owns the whole window. Keeping connection-dependent app
  * chrome composed behind it makes that chrome rebuild while Add connection
  * swaps to its placeholder, visibly resizing the entering setup surface.
@@ -455,6 +448,26 @@ internal fun petSurfaceOwnerForRoute(route: String?): String? = when (route) {
 /** Petdex already supplies interactive pet previews; keep its install cards unobstructed. */
 internal fun floatingPetAllowedOnRoute(route: String?): Boolean =
     route != Screen.PetdexBrowse.route
+
+internal fun relayStartDestination(onboardingCompleted: Boolean, supervisedEnabled: Boolean): String =
+    when {
+        !onboardingCompleted -> Screen.Onboarding.route
+        supervisedEnabled -> Screen.Chat.route
+        else -> Screen.BotMode.route
+    }
+
+internal fun isBotWorkspaceRoute(route: String?): Boolean =
+    route == Screen.BotMode.route || route?.startsWith("${Screen.BotMode.route}/") == true
+
+internal fun NavHostController.returnToBots(openPicker: Boolean = false) {
+    if (!popBackStack(Screen.BotMode.route, inclusive = false)) {
+        navigate(Screen.BotMode.route) {
+            popUpTo(Screen.Chat.route) { inclusive = true }
+            launchSingleTop = true
+        }
+    }
+    if (openPicker) getBackStackEntry(Screen.BotMode.route).savedStateHandle["openBotPicker"] = true
+}
 
 sealed class Screen(
     val route: String,
@@ -744,8 +757,6 @@ fun RelayApp() {
 
     val voiceClient: RelayVoiceClient = processRuntime.relayVoiceClient
     val voicePreferences = processRuntime.voicePreferences
-    val voiceSettings by processRuntime.voiceSettings.collectAsState()
-    val voicePresentationMode = VoicePresentationMode.fromStorage(voiceSettings.presentationMode)
 
     // Composition-scoped coroutine scope for firing connection-store suspend
     // writes off of UI click handlers (rename/revoke/remove) —
@@ -1363,7 +1374,13 @@ fun RelayApp() {
 
         // startDestination uses the route TEMPLATE so it matches the
         // composable registered below; optional args default to null/false.
-        val startDestination = if (onboardingCompleted) Screen.Chat.route else Screen.Onboarding.route
+        // Pick the root once after policy hydration; later connection switches
+        // use the supervised redirect without replacing the navigation graph.
+        val supervisedStart = remember { mutableStateOf<Boolean?>(null) }
+        if (supervisedStart.value == null && relayNavigationHydrated) {
+            supervisedStart.value = supervisedPolicy.enabled
+        }
+        val startDestination = relayStartDestination(onboardingCompleted, supervisedStart.value == true)
 
         // Offline Demo / Explore mode. Treated like "onboarding complete" for
         // CHROME purposes (so the demo Chat shows the normal scaffold + status
@@ -1454,6 +1471,7 @@ fun RelayApp() {
                 isDemoMode = isDemoMode,
                 currentRoute = currentRoute,
             )
+        val botWorkspaceVisible = isBotWorkspaceRoute(currentRoute)
 
         // Safety net: landing on a real connect surface (onboarding or the
         // Connect/Pair wizard) while demo is still active — via the banner's
@@ -1528,6 +1546,9 @@ fun RelayApp() {
         // bottom navigation bar so the voice overlay can own the entire screen
         // without the Chat/Terminal/Bridge/Settings tabs peeking through below.
         val voiceUiState by voiceViewModel.uiState.collectAsState()
+        val botVoiceSession by processRuntime.botVoiceSession.collectAsState()
+        val botVoiceUiState by (botVoiceSession?.uiState ?: voiceViewModel.uiState).collectAsState()
+        val voiceModeActive = voiceUiState.voiceMode || botVoiceUiState.voiceMode
         val wakeActivation by
             com.hermesandroid.relay.wake.WakeWordActivationCoordinator.pending.collectAsState()
         val appIsForeground by
@@ -1550,6 +1571,7 @@ fun RelayApp() {
             }
             if (!appIsForeground) return@LaunchedEffect
 
+            processRuntime.stopBotVoiceSession()
             com.hermesandroid.relay.wake.WakeWordForegroundService.prepareForVoice()
             if (activation.startNewSession) {
                 chatViewModel.createNewChat()
@@ -1565,9 +1587,9 @@ fun RelayApp() {
             com.hermesandroid.relay.wake.WakeWordActivationCoordinator.consume(activation.id)
         }
 
-        LaunchedEffect(voiceUiState.voiceMode) {
+        LaunchedEffect(voiceModeActive) {
             com.hermesandroid.relay.wake.WakeWordForegroundService.setVoiceSessionActive(
-                voiceUiState.voiceMode
+                voiceModeActive
             )
         }
         val postResumeQuiet by connectionViewModel.postResumeQuiet.collectAsState()
@@ -1813,8 +1835,9 @@ fun RelayApp() {
         }
         val showStartupSphere =
             !suppressGlobalChrome &&
+                !botWorkspaceVisible &&
                 !startupGateReleased &&
-                !voiceUiState.voiceMode &&
+                !voiceModeActive &&
                 // Demo mode skips the startup connect-narration sphere entirely
                 // — there's no server to contact, so the canned chat shows
                 // immediately.
@@ -1936,17 +1959,17 @@ fun RelayApp() {
             timedScreenControlActive &&
             !suppressGlobalChrome &&
             !showStartupSphere &&
-            !voiceUiState.voiceMode
+            !voiceModeActive
         val showCandidateBanner = CandidateBuild.isCandidate &&
-            !voiceUiState.voiceMode &&
+            !voiceModeActive &&
             !showStartupSphere
         // Persistent Demo-mode strip — visible on every demo surface so the
         // user always knows the chat is sample data with no live server, and
         // can exit into the real Connect flow with one tap.
-        val showDemoBanner = isDemoMode && !voiceUiState.voiceMode
+        val showDemoBanner = isDemoMode && !voiceModeActive
         val hostResourcePressure by connectionViewModel.hostResourcePressure.collectAsState()
         val showHostResourcePressure = hostResourcePressure.needsAttention &&
-            !isDemoMode && !voiceUiState.voiceMode && !showStartupSphere
+            !isDemoMode && !voiceModeActive && !showStartupSphere
         val hostResourcePressureText = buildList {
             if (hostResourcePressure.lastBootSuspectedOom) {
                 add(stringResource(R.string.host_resource_recent_oom))
@@ -1991,7 +2014,7 @@ fun RelayApp() {
         // few seconds and then clear with no "Connected" toast).
         val connectionReconnecting =
             appChatRuntimeStatus is ChatRuntimeStatus.Connecting && !postResumeQuiet &&
-                !suppressGlobalChrome && !showStartupSphere && !voiceUiState.voiceMode
+                !suppressGlobalChrome && !showStartupSphere && !voiceModeActive
         // === END v0.4.1 polish ===
 
         // Multi-connection switcher has moved into the AgentInfoSheet's
@@ -2151,11 +2174,12 @@ fun RelayApp() {
             bottomBar = {
                 if (
                     !suppressGlobalChrome &&
+                    !botWorkspaceVisible &&
                     !isKeyboardVisible &&
                     !showStartupSphere &&
                     (!supervisedPolicy.enabled ||
                         supervisedPolicy.visibility.resolved().showTechnicalRoute) &&
-                    shouldShowConnectionFooter(voiceUiState.voiceMode, voicePresentationMode)
+                    !voiceModeActive
                 ) {
                     val footerRoute = resolveFooterRouteCandidate(
                         runtimeStatus = appChatRuntimeStatus,
@@ -2264,7 +2288,7 @@ fun RelayApp() {
                     // The wizard inside OnboardingScreen now owns credential
                     // application via ConnectionViewModel.applyPairingPayload,
                     // so the callback collapses to "mark complete + navigate
-                    // to chat". The legacy 4-arg signature was discarding the
+                    // to home". The legacy 4-arg signature was discarding the
                     // relay block entirely.
                     //
                     // CRITICAL: pass the Activity-scoped connectionViewModel
@@ -2299,11 +2323,9 @@ fun RelayApp() {
                                     return@launch
                                 }
                                 connectionViewModel.completeOnboarding()
-                                // Concrete bare-"chat" URI — the Screen.Chat.route
-                                // field is the route TEMPLATE (contains
-                                // `{openAgentSheet}`) and must not be navigated
-                                // to directly; build the URI via Screen.Chat.route(...).
-                                navController.navigate(Screen.Chat.route(openAgentSheet = false)) {
+                                navController.navigate(
+                                    if (supervisedPolicy.enabled) Screen.Chat.route() else Screen.BotMode.route,
+                                ) {
                                     popUpTo(Screen.Onboarding.route) { inclusive = true }
                                 }
                             }
@@ -2518,12 +2540,6 @@ fun RelayApp() {
                             voiceViewModel = voiceViewModel,
                             voiceClient = voiceClient,
                             maxBubbleWidth = maxBubbleWidth,
-                            voicePresentationMode = voicePresentationMode,
-                            onVoicePresentationModeChange = { mode ->
-                                connectionSwitchScope.launch {
-                                    voicePreferences.setPresentationMode(mode)
-                                }
-                            },
                             openAgentSheetOnEntry = openAgentSheetArg,
                             onAgentSheetArgConsumed = {
                                 backStackEntry.arguments?.putBoolean(
@@ -2601,8 +2617,12 @@ fun RelayApp() {
                             },
                             supervisedPolicy = chatSupervisedPolicy,
                             onNavigateToBotMode = {
-                                navController.navigate(Screen.BotMode.route) { launchSingleTop = true }
+                                navController.returnToBots()
                             },
+                            onBackToBots = { navController.returnToBots() }
+                                .takeIf { !supervisedPolicy.enabled && onboardingCompleted },
+                            onNewBotChat = { navController.returnToBots(openPicker = true) }
+                                .takeIf { !supervisedPolicy.enabled && onboardingCompleted && !isDemoMode },
                             gitWorkspaceAvailable = gitWorkspaceAvailable,
                             gitWorkspaceSummary = gitWorkspaceSummary,
                             onNavigateToGitWorkspace = {
@@ -2611,11 +2631,24 @@ fun RelayApp() {
                         )
                     }
                 }
-                composable(Screen.BotMode.route) {
+                composable(Screen.BotMode.route) { entry ->
+                    val openPicker by entry.savedStateHandle
+                        .getStateFlow("openBotPicker", false).collectAsState()
                     BotModeScreen(
                         connectionViewModel = connectionViewModel,
-                        onBack = { navController.popBackStack() },
+                        openPicker = openPicker,
+                        onPickerHandled = { entry.savedStateHandle["openBotPicker"] = false },
+                        onOpenSettings = {
+                            navController.navigate(Screen.Settings.route) { launchSingleTop = true }
+                        },
+                        onOpenChat = {
+                            chatViewModel.createNewChat()
+                            navController.navigate(Screen.Chat.route(openAgentSheet = false)) {
+                                launchSingleTop = true
+                            }
+                        },
                         onOpenBotChat = { route, sessionId ->
+                            voiceViewModel.exitVoiceMode()
                             navController.navigate(
                                 Screen.BotChat.route(
                                     connectionId = route.connectionId,
@@ -2639,7 +2672,7 @@ fun RelayApp() {
                     val botModeState by connectionViewModel.botModeState.collectAsState()
                     BotGroupDetailScreen(
                         room = botModeState.roster.groups.firstOrNull { it.key == roomKey },
-                        onBack = { navController.popBackStack() },
+                        onBack = { navController.returnToBots() },
                     )
                 }
                 composable(
@@ -2693,10 +2726,26 @@ fun RelayApp() {
                             )
                         }
                     } else {
+                        val workspaceOwner = remember(entry) {
+                            runCatching { navController.getBackStackEntry(Screen.BotMode.route) }.getOrDefault(entry)
+                        }
+                        val conversationKey = listOf(bot.lazyItemKey, currentRouteUrl, route.installId.orEmpty(), sessionId)
+                            .joinToString("") { "${it.length}:$it" }
                         val botChatViewModel: ChatViewModel = viewModel(
-                            key = "bot-chat:${route.connectionId}:${route.profileName}:$sessionId",
+                            viewModelStoreOwner = workspaceOwner,
+                            key = "bot-chat:$conversationKey",
+                            factory = viewModelFactory {
+                                initializer { ChatViewModel().apply {
+                                    installComposerDraftStore(chatViewModel.composerDraftStore)
+                                } }
+                            },
+                        )
+                        val botScrollState: com.hermesandroid.relay.ui.screens.BotChatScrollState = viewModel(
+                            viewModelStoreOwner = workspaceOwner,
+                            key = "bot-scroll:$conversationKey",
                         )
                         BotChatScreen(
+                            scrollState = botScrollState,
                             route = route,
                             bot = bot,
                             sessionId = sessionId,
@@ -2704,7 +2753,16 @@ fun RelayApp() {
                             dashboardClient = botDashboardClient,
                             chatViewModel = botChatViewModel,
                             connectionViewModel = connectionViewModel,
-                            onBack = { navController.popBackStack() },
+                            onNewChat = { navController.returnToBots(openPicker = true) },
+                            onVoiceSessionChanged = { voice, mounted ->
+                                if (mounted) {
+                                    voiceViewModel.exitVoiceMode()
+                                    processRuntime.registerBotVoiceSession(voice)
+                                } else {
+                                    processRuntime.unregisterBotVoiceSession(voice)
+                                }
+                            },
+                            onBack = { navController.returnToBots() },
                         )
                     }
                 }
@@ -2788,7 +2846,9 @@ fun RelayApp() {
                             when (source) {
                                 Screen.DashboardSignIn.SOURCE_ONBOARDING -> {
                                     connectionViewModel.completeOnboarding()
-                                    navController.navigate(Screen.Chat.route()) {
+                                    navController.navigate(
+                                        if (supervisedPolicy.enabled) Screen.Chat.route() else Screen.BotMode.route,
+                                    ) {
                                         popUpTo(Screen.Onboarding.route) { inclusive = true }
                                         launchSingleTop = true
                                     }
@@ -3009,11 +3069,6 @@ fun RelayApp() {
                         onNavigateToPermissions = {
                             navController.navigate(Screen.PermissionsSettings.route)
                         },
-                        // === PHASE3-safety-rails: bridge safety route ===
-                        onNavigateToBridgeSafety = {
-                            navController.navigate(Screen.BridgeSafetySettings.route)
-                        },
-                        // === END PHASE3-safety-rails ===
                         onNavigateToPairedDevices = {
                             navController.navigate(Screen.PairedDevices.route)
                         },
@@ -3787,7 +3842,7 @@ fun RelayApp() {
             !petActivity.hidden &&
             !suppressGlobalChrome &&
             !showStartupSphere &&
-            !voiceUiState.voiceMode
+            !voiceModeActive
         if (showFloatingPet) {
             val roamingRoute = petSurfaceOwner
             FloatingPetCompanion(
@@ -3854,7 +3909,7 @@ fun RelayApp() {
             }
             AnimatedVisibility(
                 visible = availableUpdateStatus != null && !suppressGlobalChrome &&
-                    !showStartupSphere && !voiceUiState.voiceMode,
+                    !showStartupSphere && !voiceModeActive,
                 enter = slideInVertically(tween(220)) { -it } + fadeIn(tween(180)),
                 exit = slideOutVertically(tween(200)) { -it } + fadeOut(tween(160)),
             ) {

@@ -3,10 +3,24 @@ package com.hermesandroid.relay.ui.screens
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.swipeDown
+import org.junit.Assert.assertFalse
+import androidx.compose.ui.test.performScrollToIndex
+import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performClick
+import com.github.takahirom.roborazzi.captureRoboImage
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.hermesandroid.relay.data.ChatComposerDraft
+import com.hermesandroid.relay.data.ChatComposerDraftKey
 import com.hermesandroid.relay.data.BotGatewayRoute
 import com.hermesandroid.relay.data.BotGatewayRouteKey
 import com.hermesandroid.relay.data.BotRosterEntry
@@ -21,6 +35,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.serialization.json.JsonPrimitive
@@ -44,6 +59,79 @@ class BotChatScreenBindingTest {
     @After
     fun tearDown() {
         resources.forEach(ScreenResources::close)
+    }
+
+    @Test
+    fun reopeningKeepsTranscriptAndReadingPositionWithoutLoadingHistoryAgain() {
+        val screen = resources("retained")
+        val visible = mutableStateOf(true)
+        val scrollState = BotChatScrollState()
+        var loads = 0
+        compose.setContent {
+            if (visible.value) MaterialTheme {
+                screen.content(
+                    handler = screen.viewModel.boundHandler ?: ChatHandler(),
+                    historyLoader = { _, _, _ ->
+                        loads++
+                        Result.success((0..40).map { index ->
+                            history(screen.sessionId, "Stored message $index").single().copy(id = "row-$index")
+                        })
+                    },
+                    scrollState = scrollState,
+                )
+            }
+        }
+        compose.waitUntil(5_000) { scrollState.positioned }
+        compose.runOnIdle { scrollState.followingLatest = false }
+        compose.onNodeWithTag("bot-chat-messages").performScrollToIndex(5)
+        compose.waitForIdle()
+        val index = scrollState.listState.firstVisibleItemIndex
+        val offset = scrollState.listState.firstVisibleItemScrollOffset
+        compose.runOnIdle { visible.value = false }
+        compose.runOnIdle { visible.value = true }
+        compose.waitForIdle()
+        assertEquals(1, loads)
+        assertEquals(index, scrollState.listState.firstVisibleItemIndex)
+        assertEquals(offset, scrollState.listState.firstVisibleItemScrollOffset)
+    }
+
+    @Test
+    fun newMessagesDoNotPullReaderAwayFromHistory() {
+        val screen = resources("reader")
+        val handler = ChatHandler()
+        val scrollState = BotChatScrollState()
+        compose.setContent {
+            MaterialTheme {
+                screen.content(handler, { _, _, _ ->
+                    Result.success((0..40).map { index ->
+                        history(screen.sessionId, "Stored message $index").single().copy(id = "row-$index")
+                    })
+                }, scrollState = scrollState)
+            }
+        }
+        compose.waitUntil(5_000) { scrollState.positioned }
+        compose.onNodeWithTag("bot-chat-messages").performScrollToIndex(5)
+        compose.waitForIdle()
+        compose.onNodeWithTag("bot-chat-messages").performTouchInput { swipeDown() }
+        compose.waitForIdle()
+        assertFalse(scrollState.followingLatest)
+        val index = scrollState.listState.firstVisibleItemIndex
+        val offset = scrollState.listState.firstVisibleItemScrollOffset
+        compose.runOnIdle { handler.onTextDelta("new-answer", "New message while reading history") }
+        compose.waitForIdle()
+        assertEquals(index, scrollState.listState.firstVisibleItemIndex)
+        assertEquals(offset, scrollState.listState.firstVisibleItemScrollOffset)
+        compose.onNodeWithContentDescription("Scroll to bottom").performClick()
+        compose.onNodeWithText("New message while reading history").assertIsDisplayed()
+        compose.runOnIdle { handler.onTextDelta("new-answer", " continuing") }
+        compose.onNodeWithText("New message while reading history continuing").assertIsDisplayed()
+        compose.runOnIdle { handler.onTextDelta("new-answer", "\n" + "A long streaming answer.\n".repeat(80)) }
+        compose.waitUntil(5_000) {
+            scrollState.listState.layoutInfo.visibleItemsInfo.any { it.key == "new-answer" && it.size > 1_000 }
+        }
+        compose.waitUntil(5_000) { !scrollState.listState.canScrollForward }
+        compose.waitForIdle()
+        assertFalse(scrollState.listState.canScrollForward)
     }
 
     @Test
@@ -71,6 +159,16 @@ class BotChatScreenBindingTest {
 
         compose.runOnIdle { handler.onTextDelta("live-tail", LIVE_TAIL) }
         compose.onNodeWithText(LIVE_TAIL).assertIsDisplayed()
+
+        // Grok-style chrome: bot pill, named placeholder, + opens the attach sheet.
+        compose.onNodeWithText("Research").assertIsDisplayed()
+        compose.onNodeWithText("Message Research").assertIsDisplayed()
+        compose.onRoot().captureRoboImage("build/ui-regression/bot-chat.png")
+        compose.onNodeWithContentDescription("Add attachment").performClick()
+        compose.onNodeWithText("Photos").assertIsDisplayed()
+        compose.onNodeWithText("Files").assertIsDisplayed()
+        compose.onRoot().captureRoboImage("build/ui-regression/bot-chat-attach-sheet.png")
+        compose.onNodeWithText("Files").performClick()
 
         compose.runOnIdle { handler.onStreamError(HANDLER_ERROR) }
         compose.onNodeWithText(HANDLER_ERROR).assertIsDisplayed()
@@ -151,6 +249,68 @@ class BotChatScreenBindingTest {
         assertEquals(listOf(NEW_HISTORY), secondHandler.messages.value.map { it.content })
     }
 
+    @Test
+    fun composerVoiceWaitsForLoadedBotSessionAndUsesOnlyItsCallback() {
+        val screen = resources("voice-bot")
+        val handler = ChatHandler()
+        val releaseHistory = CompletableDeferred<Unit>()
+        var starts = 0
+        compose.setContent {
+            MaterialTheme {
+                screen.content(handler, { _, _, _ ->
+                    releaseHistory.await()
+                    Result.success(history(screen.sessionId, DELAYED_HISTORY))
+                }, onVoice = { starts++ })
+            }
+        }
+        compose.waitUntil(5_000) { screen.viewModel.isLoadingHistory.value }
+        compose.onNodeWithTag(BOT_CHAT_VOICE_TAG).assertIsNotEnabled()
+        releaseHistory.complete(Unit)
+        compose.waitUntil(5_000) { !screen.viewModel.isLoadingHistory.value }
+        compose.onNodeWithTag(BOT_CHAT_VOICE_TAG).assertIsEnabled().performClick()
+        compose.runOnIdle {
+            assertEquals(1, starts)
+            assertEquals(screen.sessionId, screen.viewModel.currentSessionId.value)
+            handler.onStreamError(HANDLER_ERROR)
+        }
+        compose.onNodeWithTag(BOT_CHAT_VOICE_TAG).assertIsNotEnabled()
+    }
+
+    @Test
+    fun newAndBotIdentityOpenTheBotPicker() {
+        val screen = resources("research")
+        var pickerRequests = 0
+        compose.setContent {
+            MaterialTheme {
+                screen.content(handler = ChatHandler(), historyLoader = { _, _, _ -> Result.success(emptyList()) },
+                    onNewChat = { pickerRequests++ })
+            }
+        }
+        compose.onNodeWithContentDescription("New chat").performClick()
+        compose.onNodeWithText("Research").performClick()
+        compose.runOnIdle { assertEquals(2, pickerRequests) }
+    }
+
+    @Test
+    fun newSavesDraftUnderTheExactBotOwner() {
+        val screen = resources("research")
+        val owner = ChatComposerDraftKey(screen.route.connectionId, "research", screen.sessionId)
+        runBlocking { screen.viewModel.composerDraftStore.save(owner, ChatComposerDraft(text = "Unsent plan")) }
+        var opened = false
+        compose.setContent {
+            MaterialTheme {
+                screen.content(ChatHandler(), { _, _, _ -> Result.success(emptyList()) }, onNewChat = { opened = true })
+            }
+        }
+        compose.onNodeWithText("Unsent plan").performTextInput(" update")
+        compose.onNodeWithContentDescription("New chat").performClick()
+        compose.waitUntil { opened }
+        runBlocking {
+            assertEquals("Unsent plan update", screen.viewModel.composerDraftStore.snapshot(owner).text)
+            assertEquals("", screen.viewModel.composerDraftStore.snapshot(owner.copy(profileId = "other")).text)
+        }
+    }
+
     private fun resources(profileName: String): ScreenResources = ScreenResources(profileName).also {
         resources += it
     }
@@ -192,7 +352,7 @@ class BotChatScreenBindingTest {
         )
 
         @androidx.compose.runtime.Composable
-        fun content(handler: ChatHandler, historyLoader: BotChatHistoryLoader) {
+        fun content(handler: ChatHandler, historyLoader: BotChatHistoryLoader, onVoice: (() -> Unit)? = null, onNewChat: (() -> Unit)? = null, scrollState: BotChatScrollState = androidx.compose.runtime.remember { BotChatScrollState() }) {
             BotChatScreen(
                 route = route,
                 bot = bot,
@@ -201,8 +361,11 @@ class BotChatScreenBindingTest {
                 dashboardClient = dashboardClient,
                 chatViewModel = viewModel,
                 onBack = {},
+                scrollState = scrollState,
+                onVoice = onVoice,
                 handlerFactory = { handler },
                 historyLoader = historyLoader,
+                onNewChat = onNewChat,
                 profileIconFlow = { _, _ -> MutableStateFlow(null) },
             )
         }

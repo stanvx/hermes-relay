@@ -1,5 +1,7 @@
 package com.hermesandroid.relay.ui.components
 
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Text
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
@@ -44,6 +46,75 @@ class SessionDrawerTest {
     val compose = createComposeRule()
 
     @Test
+    @Config(qualifiers = "w640dp-h360dp-xhdpi")
+    fun `conversation actions preserve session space in a short drawer`() {
+        var opened = 0
+        compose.setContent {
+            HermesRelayTheme(appThemeId = "clean", themePreference = "light", layoutStyleId = "clean") {
+                SessionDrawerContent(
+                    sessions = List(40) { ChatSession("s-$it", "Session $it", null, lastActivityAt = 1_000L - it) },
+                    currentSessionId = null,
+                    conversationActions = { dismiss ->
+                        DropdownMenuItem(text = { Text("Search conversation") }, onClick = { opened++; dismiss() })
+                    },
+                    onOpenSettings = {},
+                    onNewChat = {},
+                    onSelectSession = {},
+                    onDeleteSession = {},
+                    onRenameSession = { _, _ -> },
+                )
+            }
+        }
+        compose.onNodeWithText("Session 0").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Conversation actions").performClick()
+        compose.onNodeWithText("Search conversation").assertIsDisplayed().performClick()
+        compose.onNodeWithText("Settings").assertIsDisplayed()
+        compose.runOnIdle { assertEquals(1, opened) }
+    }
+
+    @Test
+    fun `settings footer stays visible below a long list and opens settings`() {
+        var settingsOpened = 0
+        compose.setContent {
+            HermesRelayTheme(appThemeId = "clean", themePreference = "light", layoutStyleId = "clean") {
+                SessionDrawerContent(
+                    sessions = List(40) { index ->
+                        ChatSession("session-$index", "Session $index", null, lastActivityAt = 1_000L - index)
+                    },
+                    currentSessionId = null,
+                    onOpenSettings = { settingsOpened++ },
+                    onNewChat = {},
+                    onSelectSession = {},
+                    onDeleteSession = {},
+                    onRenameSession = { _, _ -> },
+                )
+            }
+        }
+
+        compose.onNodeWithText("Settings").assertIsDisplayed().performClick()
+        compose.runOnIdle { assertEquals(1, settingsOpened) }
+        compose.onRoot().captureRoboImage("build/ui-regression/session-drawer-settings-footer.png")
+    }
+
+    @Test
+    fun `settings footer is hidden without a settings destination`() {
+        compose.setContent {
+            HermesRelayTheme(appThemeId = "hermes-relay", themePreference = "dark") {
+                SessionDrawerContent(
+                    sessions = emptyList(),
+                    currentSessionId = null,
+                    onNewChat = {},
+                    onSelectSession = {},
+                    onDeleteSession = {},
+                    onRenameSession = { _, _ -> },
+                )
+            }
+        }
+
+        compose.onNodeWithText("Settings").assertDoesNotExist()
+    }
+
+    @Test
     fun `pinned sidebar can be hidden and loads older sessions`() {
         var pinToggles = 0
         var loadMoreCalls = 0
@@ -82,7 +153,7 @@ class SessionDrawerTest {
     }
 
     @Test
-    fun `clean drawer folds secondary tools into one overflow`() {
+    fun `clean drawer shows Bots directly and folds secondary tools into one overflow`() {
         var newChats = 0
         var botModeOpens = 0
         compose.setContent {
@@ -103,12 +174,12 @@ class SessionDrawerTest {
 
         compose.onRoot().captureRoboImage("build/ui-regression/session-drawer-clean.png")
         compose.onNodeWithText("Customize sessions").assertDoesNotExist()
-        compose.onNodeWithText("Bot Mode").assertDoesNotExist()
         compose.onNodeWithContentDescription("New Chat").performClick()
         assertEquals(1, newChats)
-        compose.onNodeWithContentDescription("More actions").performClick()
-        compose.onNodeWithText("Bot Mode").performClick()
+        compose.onNodeWithText("Bots").assertIsDisplayed().performClick()
         assertEquals(1, botModeOpens)
+        compose.onNodeWithContentDescription("More actions").performClick()
+        compose.onNodeWithText("Customize sessions").assertIsDisplayed()
     }
 
     @Test

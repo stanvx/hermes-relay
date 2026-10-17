@@ -5,7 +5,6 @@ import com.hermesandroid.relay.data.Connection
 import com.hermesandroid.relay.data.DashboardEndpoint
 import com.hermesandroid.relay.data.EndpointCandidate
 import com.hermesandroid.relay.data.RelayEndpoint
-import com.hermesandroid.relay.data.VoicePresentationMode
 import com.hermesandroid.relay.network.upstream.GatewayAvailability
 import com.hermesandroid.relay.ui.screens.shouldOwnVisibleGateway
 import com.hermesandroid.relay.viewmodel.ChatConnectState
@@ -21,6 +20,24 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class RelayAppStatusTest {
+    @Test
+    fun `bot workspace owns its loading and connection chrome`() {
+        listOf(Screen.BotMode.route, Screen.BotChat.route, Screen.BotGroup.route).forEach {
+            assertTrue(isBotWorkspaceRoute(it))
+        }
+        listOf(null, Screen.Chat.route, Screen.Settings.route, "bot_mode_other").forEach {
+            assertFalse(isBotWorkspaceRoute(it))
+        }
+    }
+
+    @Test
+    fun `startup preserves onboarding and supervised chat with Bots as ordinary home`() {
+        assertEquals(Screen.Onboarding.route, relayStartDestination(false, false))
+        assertEquals(Screen.Onboarding.route, relayStartDestination(false, true))
+        assertEquals(Screen.Chat.route, relayStartDestination(true, true))
+        assertEquals(Screen.BotMode.route, relayStartDestination(true, false))
+    }
+
 
     @Test
     fun `footer model omits provider and context window suffix`() {
@@ -58,13 +75,6 @@ class RelayAppStatusTest {
         assertFalse(floatingPetAllowedOnRoute(Screen.PetdexBrowse.route))
         assertTrue(floatingPetAllowedOnRoute(Screen.Chat.route))
         assertTrue(floatingPetAllowedOnRoute(Screen.AppearanceSettings.route))
-    }
-
-    @Test
-    fun `connection footer remains visible in conversation voice only`() {
-        assertTrue(shouldShowConnectionFooter(voiceMode = false, VoicePresentationMode.Focus))
-        assertTrue(shouldShowConnectionFooter(voiceMode = true, VoicePresentationMode.Conversation))
-        assertFalse(shouldShowConnectionFooter(voiceMode = true, VoicePresentationMode.Focus))
     }
 
     @Test
